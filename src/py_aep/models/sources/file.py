@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import io
+import os
 import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, cast
 
+from ...binary.bin_utils import to_dividend_divisor
 from ...binary.footage_chunks import (
     OptiChunk,
     PsdOptiChunk,
     SspcChunk,
     TextOptiChunk,
     build_ai_layer_opti_data,
+    build_dpx_opti_data,
     build_generic_opti_data,
     build_psd_layer_opti_data,
     build_psd_opti_data,
@@ -45,6 +48,7 @@ from ...data.file_formats import (
     PSD_COMP_EXTENSIONS,
     FileFormat,
     get_file_format,
+    sequence_source_format,
 )
 from ...enums import LinearLightMode
 from ...resolvers.ai_bounds import EMPTY_BOX, footage_size, read_ai_layer_bounds
@@ -109,11 +113,13 @@ def _opti_data(fmt: FileFormat, info: MediaInfo, *, sequence: bool) -> bytes:
         )
     if fmt.opti == "hdr":
         return build_rhdr_opti_data()
+    if fmt.opti == "dpx":
+        return build_dpx_opti_data()
     if fmt.opti == "text":
         return build_text_opti_data(info.width, info.height)
     if fmt.opti == "empty" and not sequence:
         return b""
-    return build_generic_opti_data(fmt.source_format)
+    return build_generic_opti_data(fmt.source_format, sequence=sequence)
 
 
 #: The profile AE falls back to for media that carries none of its own.
@@ -121,9 +127,10 @@ _DEFAULT_PROFILE = "sRGB IEC61966-2.1"
 
 #: What AE assigns instead to video it decodes itself - an animated GIF, an
 #: MPEG, a SWF or a WMV. A still or an image sequence of the same format
-#: keeps the default, and QuickTime/MP4 name their space instead.
+#: keeps the default, and QuickTime/MP4 name their space instead. STIL and
+#: IMIO are BMP/GIF on Windows and macOS (see `GENERIC_STILL_FORMATS`).
 _VIDEO_PROFILE = "Rec.709 Gamma 2.4"
-_VIDEO_DECODED_FORMATS = frozenset({"STIL", "SWF ", "MPEO", "WMED"})
+_VIDEO_DECODED_FORMATS = frozenset({"STIL", "IMIO", "SWF ", "MPEO", "WMED"})
 
 #: Formats whose importer embeds After Effects' own catalogued copy of the
 #: profile rather than the file's bytes, and treats an untagged file as
@@ -143,7 +150,7 @@ _VIDEO_CONTAINER_FORMATS = frozenset({"MOoV", "XCEX"})
 #: importers. An audio-only QuickTime and any image sequence keep the
 #: default. The setting is inert below 32 bpc either way.
 _LINEAR_LIGHT_OFF_FORMATS = frozenset(
-    {"ZPEG", "STIL", "SWF ", "MPEO", "WMED", "MOoV", "XCEX"}
+    {"ZPEG", "STIL", "IMIO", "SWF ", "MPEO", "WMED", "MOoV", "XCEX"}
 )
 
 
@@ -581,17 +588,12 @@ class FileSource(FootageSource):
             sspc._reserved_a8 = b"\x00\x00\x00\x02"
             sspc._reserved_b8 = b"\x01"
             sspc._reserved_ba = b"\x01\x01"
-            sspc._reserved_6f = b"\x00\x00\x00\x00\x08"
-            # Sequence-specific sspc fields AE writes and does NOT recompute
-            # on open (proven necessary by an AE open+resave diff: AE
-            # preserves py's value rather than normalizing it). full_frame is
-            # False for a sequence and the 0xC8 kind bytes are 0x0000 (not
-            # the 0x0002 raster-media default). The other sequence-import
-            # diffs (duration divisor reduction and _reserved_3e) are
-            # cosmetic: AE recomputes them on open, so py leaves them at
-            # their defaults.
-            sspc.full_frame = False
-            sspc._reserved_c8 = b"\x00\x00"
+            # AE stores a sequence duration as frame_count / frame_rate,
+            # unreduced (3/30, not 1/10): every AE-authored sequence fixture.
+            fps_num, fps_den = to_dividend_divisor(frame_rate)
+            frame_count = round(duration * frame_rate)
+            sspc.duration_dividend = frame_count * fps_den
+            sspc.duration_divisor = fps_num
 
         # Route through variant dispatch so a recognized asset type (e.g.
         # 8BPS -> PsdOptiChunk) is stored as its typed subclass and exposes
@@ -901,6 +903,12 @@ class FileSource(FootageSource):
             raise ValueError("a sequence range start requires a range end")
         if has_range and range_end < range_start:
             raise ValueError("Range end cannot be less than range start")
+
+        # BMP/GIF sequences take the running platform's importer code. AE
+        # refuses the other one (see GENERIC_STILL_FORMATS).
+        fmt = fmt._replace(
+            source_format=sequence_source_format(fmt, windows=os.name == "nt")
+        )
 
         frame_re = re.compile(re.escape(prefix) + r"(\d+)$")
         frames: list[tuple[int, str]] = []

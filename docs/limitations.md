@@ -256,10 +256,20 @@ from a static file rather than through AE's live media engine:
       table, and Type 3 fonts, fall back to a generic estimate.
       Illustrator always embeds fonts with explicit widths, so this only
       affects PDFs from other producers.
+- **BMP and GIF image sequences are platform-specific.** Neither format has
+  a dedicated AE importer, so AE tags them with the platform's generic still
+  importer (`IMIO` on macOS, `STIL` on Windows). Measured in AE 2026 on both:
+  an `IMIO` still opens on either platform, so py-aep writes `IMIO` for
+  stills everywhere; but an `IMIO` sequence never opens on Windows and a
+  `STIL` sequence never opens on macOS - even in an AE-collected project.
+  py-aep picks the sequence code from the platform it is running on,
+  so a BMP/GIF sequence needs re-importing when the project changes platform.
 - **`has_alpha` is a per-format heuristic**, not a full media decode. Alpha is
   inferred from the format and header - allocated for PNG/TIFF/BMP/GIF, opaque
   for JPEG, and derived from the channel list (EXR), bit depth (TGA), codec
-  depth (MOV), or layer transparency/channel count (PSD/PSB). These match AE's
+  depth (MOV), descriptor (DPX) or channel count (Cineon), auxiliary
+  alpha item (HEIC/HEIF), or layer transparency/channel count (PSD/PSB).
+  These match AE's
   import for the tested samples but are not a guaranteed media-accurate decode.
 
 ### PSD layer styles (ImportOptions.layer_styles)

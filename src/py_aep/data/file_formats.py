@@ -26,18 +26,41 @@ class FileFormat(NamedTuple):
 
     - `"empty"`: AE re-reads the located file (PNG, EXR); an empty `opti` works.
     - `"generic"`: AE's generic media importer needs the 58-byte `opti` header
-      (JPEG, BMP, GIF, TGA, MOV, WAV).
+      (JPEG, TGA, MOV, WAV, HEIC).
     - `"tiff"`: AE needs the 602-byte TIFF-specific header (see
       `build_tiff_opti_data`).
     - `"psd"`: AE itself writes an empty opti for PSD (AE 2026 measured);
       py-aep generates a `PsdOptiChunk` with layer metadata, which AE
       accepts on re-open. The 602-byte body is produced by `build_psd_opti_data`.
+    - `"dpx"`: AE needs the 48-byte DPX/Cineon format-options header (see
+      `build_dpx_opti_data`).
     - `"unsupported"`: AE requires a format-specific `opti` not yet
       reverse-engineered; import is refused rather than crashing AE."""
 
 
 #: `sspc.source_format_type` of a 3D model scene (`.fbx`).
 FORMAT_3D_MODEL_SCENE = "LDOM"
+
+#: BMP/GIF have no dedicated importer; AE tags them with the platform's
+#: generic still importer. Measured in AE 2026 on both platforms: an IMIO
+#: still opens on either, but an IMIO sequence never opens on Windows and
+#: a STIL sequence never opens on macOS, so sequences follow the path's
+#: platform (imio_*.aep vs media_replacement.aep fixtures).
+GENERIC_STILL_FORMATS = {"macos": "IMIO", "windows": "STIL"}
+
+
+def sequence_source_format(fmt: FileFormat, *, windows: bool) -> str:
+    """The `sspc` code for an image sequence of `fmt`.
+
+    Args:
+        fmt: The frame file's format.
+        windows: `True` to tag the sequence for AE on Windows (see
+            `GENERIC_STILL_FORMATS`).
+    """
+    if windows and fmt.source_format == GENERIC_STILL_FORMATS["macos"]:
+        return GENERIC_STILL_FORMATS["windows"]
+    return fmt.source_format
+
 
 _FILE_FORMATS: dict[str, FileFormat] = {
     ".exr": FileFormat("oEXR", True, "empty"),
@@ -48,15 +71,26 @@ _FILE_FORMATS: dict[str, FileFormat] = {
     # wrote "MPEG"/"MOoV" for the same files).
     ".mp4": FileFormat("XCEX", False, "generic"),
     ".aiff": FileFormat("AIFC", False, "generic"),
+    # AIFF alias; verified: AE 2026 imports aif.aif as AIFC footage
+    # (media_gap_formats.aep fixture).
+    ".aif": FileFormat("AIFC", False, "generic"),
     ".wav": FileFormat("WAVE", False, "generic"),
     ".png": FileFormat("png!", False, "empty"),
     ".tif": FileFormat("TIF ", False, "tiff"),
     ".tiff": FileFormat("TIF ", False, "tiff"),
+    # DPX and Cineon still frames and sequences; verified: AE 2026 imports
+    # both as sDPX footage with a 48-byte format-options header
+    # (media_gap_formats.aep fixture).
+    ".dpx": FileFormat("sDPX", False, "dpx"),
+    ".cin": FileFormat("sDPX", False, "dpx"),
+    ".heic": FileFormat("AIDE", False, "generic"),
+    ".heif": FileFormat("AIDE", False, "generic"),
     ".jpg": FileFormat("ZPEG", False, "generic"),
     ".jpeg": FileFormat("ZPEG", False, "generic"),
     ".tga": FileFormat("TPIC", False, "generic"),
-    ".bmp": FileFormat("STIL", False, "generic"),
-    ".gif": FileFormat("STIL", False, "generic"),
+    # Platform-specific generic still importer; see GENERIC_STILL_FORMATS.
+    ".bmp": FileFormat(GENERIC_STILL_FORMATS["macos"], False, "generic"),
+    ".gif": FileFormat(GENERIC_STILL_FORMATS["macos"], False, "generic"),
     ".psd": FileFormat("8BPS", False, "psd"),
     ".psb": FileFormat("8BPS", False, "psd"),
     # Video/audio containers (generic opti; codec bytes re-derived by AE).
@@ -130,6 +164,10 @@ _IMPORT_AS_TYPES: dict[str, frozenset[ImportAsType]] = {
     ".jpeg": frozenset({_FOOTAGE}),  # alias of .jpg
     ".tif": frozenset({_FOOTAGE}),
     ".tiff": frozenset({_FOOTAGE}),  # alias of .tif
+    ".dpx": frozenset({_FOOTAGE}),
+    ".cin": frozenset({_FOOTAGE}),
+    ".heic": frozenset({_FOOTAGE}),
+    ".heif": frozenset({_FOOTAGE}),
     ".tga": frozenset({_FOOTAGE}),
     ".bmp": frozenset({_FOOTAGE}),
     ".gif": frozenset({_FOOTAGE}),
@@ -141,6 +179,7 @@ _IMPORT_AS_TYPES: dict[str, frozenset[ImportAsType]] = {
     ".wmv": frozenset({_FOOTAGE}),
     # Audio - footage only (m4a may also carry an AE project).
     ".aiff": frozenset({_FOOTAGE}),
+    ".aif": frozenset({_FOOTAGE}),
     ".wav": frozenset({_FOOTAGE}),
     ".m4a": frozenset({_FOOTAGE, _PROJECT}),
     # AE still reports these importable as footage.

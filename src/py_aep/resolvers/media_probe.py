@@ -40,7 +40,7 @@ class MediaInfo(NamedTuple):
     audio_sample_rate: float = 0.0
     pixel_aspect: float = 1.0
     bit_depth: int = 8
-    """Bits per channel (8, 16, 32). Currently read only for PSD/PSB."""
+    """Bits per channel (8, 16, 32). Read for PSD/PSB, DPX/Cineon and HEIF."""
     layer_count: int = 0
     """Number of layers (PSD/PSB only; 0 for a flattened document)."""
     channels: int = 0
@@ -1796,6 +1796,133 @@ def _probe_wmv(fp: IO[bytes]) -> MediaInfo:
     )
 
 
+def _probe_dpx_cineon(fp: IO[bytes]) -> MediaInfo:
+    """Probe a DPX (SMPTE 268M) or Cineon (SMPTE V4.5) file header.
+
+    Handles both byte orders for each format: DPX big-endian (`SDPX`) and
+    little-endian (`XPDS`), Cineon big-endian (``0x802A5FD7``) and
+    little-endian (``0xD75F2A80``).
+
+    Args:
+        fp: Readable binary stream positioned at the start of the file.
+
+    Returns:
+        A `MediaInfo` with width, height, bit_depth, and has_alpha filled in.
+        Duration is 0 (still frame); pixel_aspect defaults to 1.0.
+
+    Raises:
+        ValueError: If the file is too short or has an unrecognised magic number.
+    """
+    header = fp.read(1408)  # 768-byte file info + 640-byte image info
+    if len(header) < 1024:
+        raise ValueError("Not a valid DPX/Cineon file (header too short)")
+
+    magic = header[:4]
+
+    # --- DPX (SMPTE 268M) ---
+    if magic in (b"SDPX", b"XPDS"):
+        endian = ">" if magic == b"SDPX" else "<"
+        n_elem = struct.unpack(endian + "H", header[770:772])[0]
+        width, height = struct.unpack(endian + "II", header[772:780])
+        has_alpha = False
+        bit_depth = 8
+        for i in range(min(n_elem, 8)):
+            offset = 780 + i * 72
+            if offset + 24 > len(header):
+                break
+            desc, _, _, bits = struct.unpack("BBBB", header[offset + 20 : offset + 24])
+            if i == 0:
+                bit_depth = bits
+            # Descriptor 4 = alpha-only, 51 = RGBA, 52 = ABGR.
+            if desc in (4, 51, 52):
+                has_alpha = True
+        return MediaInfo(
+            width=width, height=height, bit_depth=bit_depth, has_alpha=has_alpha
+        )
+
+    # --- Cineon (SMPTE V4.5) ---
+    if magic in (b"\x80\x2a\x5f\xd7", b"\xd7\x5f\x2a\x80"):
+        endian = ">" if magic == b"\x80\x2a\x5f\xd7" else "<"
+        # Byte 192 = orientation (u1), byte 193 = number_of_elements (u1).
+        n_elem = header[193]
+        has_alpha = n_elem > 3
+        bit_depth = 8
+        width, height = 0, 0
+        for i in range(min(n_elem, 8)):
+            offset = 196 + i * 28
+            if offset + 12 > len(header):
+                break
+            _, _, bits, _ = struct.unpack("BBBB", header[offset : offset + 4])
+            w, h = struct.unpack(endian + "II", header[offset + 4 : offset + 12])
+            if i == 0:
+                bit_depth = bits
+                width, height = w, h
+        return MediaInfo(
+            width=width, height=height, bit_depth=bit_depth, has_alpha=has_alpha
+        )
+
+    raise ValueError("Not a valid DPX/Cineon file (bad magic number)")
+
+
+def _probe_heif(fp: IO[bytes]) -> MediaInfo:
+    """Probe a HEIF/HEIC (ISO/IEC 23008-12) still image.
+
+    Walks the ISOBMFF box tree (`meta` -> `iprp` -> `ipco`) for `ispe`
+    (dimensions), `pixi` (bit depth) and an `auxC` alpha item. Accepts any
+    `ftyp` whose major or compatible brands include `heic`, `heix`, `mif1`
+    or `heif`.
+
+    Raises:
+        ValueError: If the file is too short, has no HEIF brand, or no `ispe`.
+    """
+    data = fp.read()
+    if len(data) < 12:
+        raise ValueError("Not a valid HEIF file (too short)")
+
+    ftyp_size = _u(data, 0, 4)
+    if data[4:8] != b"ftyp" or ftyp_size < 16 or ftyp_size > len(data):
+        raise ValueError("Not a valid HEIF file (missing ftyp box)")
+    heif_brands = {b"heic", b"heix", b"mif1", b"heif"}
+    major = data[8:12]
+    compat = {data[i : i + 4] for i in range(16, ftyp_size, 4)}
+    if major not in heif_brands and not (compat & heif_brands):
+        raise ValueError("Not a valid HEIF file (no HEIF brand in ftyp)")
+
+    width = height = 0
+    bit_depth = 8
+    has_alpha = False
+    for a1, b1, e1 in _atoms(data, 0, len(data)):
+        if a1 != b"meta":
+            continue
+        # meta is a full box: version(1) + flags(3) precede its children.
+        for a2, b2, e2 in _atoms(data, b1 + 4, e1):
+            if a2 != b"iprp":
+                continue
+            for a3, b3, e3 in _atoms(data, b2, e2):
+                if a3 != b"ipco":
+                    continue
+                for a4, b4, e4 in _atoms(data, b3, e3):
+                    if a4 == b"ispe" and width == 0:
+                        # ispe is a full box: version(4) + width(4) + height(4).
+                        width = _u(data, b4 + 4, 4)
+                        height = _u(data, b4 + 8, 4)
+                    elif a4 == b"pixi" and bit_depth == 8:
+                        nc = data[b4 + 4] if b4 + 5 <= e4 else 0
+                        if nc and b4 + 5 + nc <= e4:
+                            bit_depth = data[b4 + 5]
+                    elif a4 == b"auxC":
+                        # Null-terminated URN after version+flags; the alpha
+                        # plane's is urn:mpeg:hevc:2015:auxid:1.
+                        urn = data[b4 + 4 : e4].split(b"\x00", 1)[0]
+                        if b"auxid" in urn:
+                            has_alpha = True
+    if width == 0:
+        raise ValueError("Not a valid HEIF file (no ispe box found)")
+    return MediaInfo(
+        width=width, height=height, bit_depth=bit_depth, has_alpha=has_alpha
+    )
+
+
 _PARSERS: dict[str, Callable[[IO[bytes]], MediaInfo]] = {
     ".png": _probe_png,
     ".mov": _probe_mov,
@@ -1818,6 +1945,7 @@ _PARSERS: dict[str, Callable[[IO[bytes]], MediaInfo]] = {
     ".pdf": _probe_text,
     ".wmv": _probe_wmv,
     ".aiff": _probe_aiff,
+    ".aif": _probe_aiff,
     ".wav": _probe_wav,
     ".exr": _probe_exr,
     ".tif": _probe_tiff,
@@ -1829,4 +1957,8 @@ _PARSERS: dict[str, Callable[[IO[bytes]], MediaInfo]] = {
     ".gif": _probe_gif,
     ".psd": _probe_psd,
     ".psb": _probe_psd,
+    ".dpx": _probe_dpx_cineon,
+    ".cin": _probe_dpx_cineon,
+    ".heic": _probe_heif,
+    ".heif": _probe_heif,
 }

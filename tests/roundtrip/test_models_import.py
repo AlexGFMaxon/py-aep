@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import struct
 import warnings
 from pathlib import Path
@@ -193,6 +194,40 @@ class TestImportFileSingle:
         assert item.main_source.is_still is False
         assert item.duration == pytest.approx(0.1274376, abs=1e-5)
 
+    def test_import_dpx(self) -> None:
+        project = parse_aep(BASE).project
+        item = project.import_file(ImportOptions(ASSETS / "dpx_8bit_rgb.dpx"))
+        assert isinstance(item.main_source, FileSource)
+        assert item.main_source.is_still is True
+        assert item.main_source._sspc.source_format_type == "sDPX"
+        assert len(item.main_source._opti.data) == 48
+
+    def test_import_cin(self) -> None:
+        project = parse_aep(BASE).project
+        item = project.import_file(ImportOptions(ASSETS / "cin.cin"))
+        assert isinstance(item.main_source, FileSource)
+        assert item.main_source.is_still is True
+        assert item.main_source._sspc.source_format_type == "sDPX"
+        assert len(item.main_source._opti.data) == 48
+
+    def test_import_heic(self) -> None:
+        project = parse_aep(BASE).project
+        item = project.import_file(ImportOptions(ASSETS / "heic.heic"))
+        assert isinstance(item.main_source, FileSource)
+        assert item.main_source.is_still is True
+        assert item.main_source._sspc.source_format_type == "AIDE"
+        assert len(item.main_source._opti.data) == 58
+        assert item.main_source.has_alpha is False
+
+    def test_import_heic_alpha(self) -> None:
+        project = parse_aep(BASE).project
+        item = project.import_file(ImportOptions(ASSETS / "heic_alpha.heic"))
+        assert isinstance(item.main_source, FileSource)
+        assert item.main_source.is_still is True
+        assert item.main_source._sspc.source_format_type == "AIDE"
+        assert item.main_source.has_alpha is True
+        assert item.main_source.alpha_mode == AlphaMode.STRAIGHT
+
     def test_roundtrip_m4v_aiff(self, tmp_path: Path) -> None:
         project = parse_aep(BASE).project
         for name in (
@@ -299,6 +334,16 @@ class TestImportFileSequence:
         assert item.name == "sequence_[001-003].gif"
         assert item.main_source.is_still is False
 
+    def test_import_dpx_sequence(self) -> None:
+        project = parse_aep(BASE).project
+        opts = ImportOptions(ASSETS / "dpx_seq.0001.dpx")
+        opts.sequence = True
+        item = project.import_file(opts)
+        assert item.name == "dpx_seq.[0001-0003].dpx"
+        assert item.main_source.is_still is False
+        assert item.main_source._sspc.source_format_type == "sDPX"
+        assert len(item.main_source._opti.data) == 48
+
     def test_item_labels_by_kind(self, tmp_path: Path) -> None:
         # AE 2026 probed: still=5, audio=7, video=3 (Label Preference
         # Indices Section 5 factory values).
@@ -380,18 +425,16 @@ class TestImportFileSequence:
         assert "new_exr.[0002-0003].exr" in names
 
     def test_sequence_sspc_necessary_fields(self, tmp_path: Path) -> None:
-        # AE writes these three sspc fields for image sequences and does NOT
-        # recompute them on open (proven necessary by an AE open+resave
-        # diff, 2026-07-14): full_frame False, 0xC8 kind bytes 0x0000, and
-        # byte 5 of the field-separation block 0x01. Verified byte-identical
-        # to AE-native PNG/EXR/GIF sequence imports.
+        # Sequence sspc fields AE writes and does not recompute on open:
+        # full_frame True, 0xC8 kept at the still-import 0x0002, from_file
+        # set (every AE-authored sequence fixture: STIL, oEXR, sDPX).
         project = parse_aep(BASE).project
         opts = ImportOptions(ASSETS / "new_exr.0002.exr")
         opts.sequence = True
         item = project.import_file(opts)
         sspc = item.main_source._sspc
-        assert sspc.full_frame is False
-        assert sspc._reserved_c8 == b"\x00\x00"
+        assert sspc.full_frame is True
+        assert sspc._reserved_c8 == b"\x00\x02"
         assert sspc.from_file is True
 
 
@@ -647,6 +690,15 @@ class TestImportGapFormats:
             ("eps.eps", "TEXT", 1921, 2881),
             ("pdf.pdf", "TEXT", 595, 842),
             ("wmv.wmv", "WMED", 640, 360),
+            ("aif.aif", "AIFC", 0, 0),
+            ("cin.cin", "sDPX", 16, 16),
+            ("dpx_8bit_rgb.dpx", "sDPX", 16, 16),
+            ("dpx_8bit_rgba.dpx", "sDPX", 16, 16),
+            ("dpx_10bit_be.dpx", "sDPX", 16, 16),
+            ("dpx_12bit_be.dpx", "sDPX", 16, 16),
+            ("dpx_16bit_rgba_be.dpx", "sDPX", 16, 16),
+            ("heic.heic", "AIDE", 16, 16),
+            ("heic_alpha.heic", "AIDE", 16, 16),
         ],
     )
     def test_import_source_format_and_dims(
@@ -713,6 +765,138 @@ class TestImportGapFormats:
         out2 = tmp_path / "g2.aep"
         parse_aep(out).project.save(out2)
         assert out.read_bytes() == out2.read_bytes()
+
+    def test_heic_roundtrip_is_byte_identical(self, tmp_path: Path) -> None:
+        project = parse_aep(BASE).project
+        project.import_file(ImportOptions(ASSETS / "heic.heic"))
+        project.import_file(ImportOptions(ASSETS / "heic_alpha.heic"))
+        out = tmp_path / "heic_test.aep"
+        project.save(out)
+        out2 = tmp_path / "heic_test2.aep"
+        parse_aep(out).project.save(out2)
+        assert out.read_bytes() == out2.read_bytes()
+
+    def test_heic_matches_ae_fixture(self) -> None:
+        fixture_dir = (
+            Path(__file__).parent.parent.parent
+            / "samples"
+            / "models"
+            / "format_options"
+            / "heic"
+        )
+        truth_project = parse_aep(fixture_dir / "base.aep").project
+        truth_items = {f.name: f for f in truth_project.footages}
+
+        project = parse_aep(BASE).project
+        for filename in ("heic.heic", "heic_alpha.heic"):
+            item = project.import_file(ImportOptions(ASSETS / filename))
+            truth = truth_items[item.name]
+            assert (item.width, item.height) == (truth.width, truth.height)
+            assert (
+                item.main_source._sspc.source_format_type
+                == truth.main_source._sspc.source_format_type
+            )
+            assert len(item.main_source._opti.data) == len(truth.main_source._opti.data)
+            assert item.main_source.has_alpha == truth.main_source.has_alpha
+            assert (
+                item.main_source._sspc.alpha_mode_raw
+                == truth.main_source._sspc.alpha_mode_raw
+            )
+
+    def test_dpx_cineon_roundtrip_is_byte_identical(self, tmp_path: Path) -> None:
+        project = parse_aep(BASE).project
+        project.import_file(ImportOptions(ASSETS / "dpx_8bit_rgb.dpx"))
+        opts = ImportOptions(ASSETS / "dpx_seq.0001.dpx")
+        opts.sequence = True
+        project.import_file(opts)
+        out = tmp_path / "dpx_test.aep"
+        project.save(out)
+        out2 = tmp_path / "dpx_test2.aep"
+        parse_aep(out).project.save(out2)
+        assert out.read_bytes() == out2.read_bytes()
+
+    def test_generic_still_imports_match_ae_fixtures(self) -> None:
+        # AE 2026 macOS tags BMP/GIF stills and sequences IMIO
+        # (imio_stills.aep, imio_sequence.aep). Windows opens IMIO stills but
+        # not IMIO sequences, so a sequence takes the host's importer code
+        # while stills stay IMIO everywhere.
+        seq_code = "STIL" if os.name == "nt" else "IMIO"
+        truth_items = {}
+        for fixture in ("imio_stills.aep", "imio_sequence.aep"):
+            for f in parse_aep(IMPORT_DIR / fixture).project.footages:
+                truth_items[f.name] = f
+
+        project = parse_aep(BASE).project
+        for filename, seq in [
+            ("bmp.bmp", False),
+            ("sequence_001.gif", False),
+            ("sequence_001.gif", True),
+        ]:
+            opts = ImportOptions(ASSETS / filename)
+            opts.sequence = seq
+            item = project.import_file(opts)
+            truth = truth_items[item.name]
+            ours, ae = item.main_source, truth.main_source
+            assert ae._sspc.source_format_type == "IMIO"
+            assert ours._sspc.source_format_type == (seq_code if seq else "IMIO")
+            assert (item.width, item.height) == (truth.width, truth.height)
+            assert len(ours._opti.data) == len(ae._opti.data) == 58
+            if seq:
+                # AE zeroes the importer block for a generic-still sequence;
+                # only the leading 4-char code is platform-specific.
+                assert ours._opti.data[:4] == seq_code.encode("ascii")
+                assert ours._opti.data[4:] == ae._opti.data[4:]
+                assert (
+                    (ours._sspc.duration_dividend, ours._sspc.duration_divisor)
+                    == (ae._sspc.duration_dividend, ae._sspc.duration_divisor)
+                    == (3, 30)
+                )
+
+    def test_generic_still_sequence_code_follows_path_platform(self) -> None:
+        # A Windows-style sequence folder takes the Windows importer (STIL,
+        # as in media_replacement.aep); stills stay IMIO on both platforms.
+        from py_aep.data.file_formats import get_file_format, sequence_source_format
+
+        for ext in (".bmp", ".gif"):
+            fmt = get_file_format(ext)
+            assert fmt.source_format == "IMIO"
+            assert sequence_source_format(fmt, windows=False) == "IMIO"
+            assert sequence_source_format(fmt, windows=True) == "STIL"
+        # Only the generic still importer is platform-specific.
+        png = get_file_format(".png")
+        assert sequence_source_format(png, windows=True) == "png!"
+
+    def test_media_gap_formats_matches_ae_fixture(self) -> None:
+        truth_project = parse_aep(IMPORT_DIR / "media_gap_formats.aep").project
+        truth_items = {f.name: f for f in truth_project.footages}
+
+        project = parse_aep(BASE).project
+        for filename, seq in [
+            ("aif.aif", False),
+            ("cin.cin", False),
+            ("dpx_8bit_rgb.dpx", False),
+            ("dpx_8bit_rgba.dpx", False),
+            ("dpx_10bit_be.dpx", False),
+            ("dpx_12bit_be.dpx", False),
+            ("dpx_16bit_rgba_be.dpx", False),
+            ("dpx_seq.0001.dpx", True),
+        ]:
+            opts = ImportOptions(ASSETS / filename)
+            opts.sequence = seq
+            item = project.import_file(opts)
+            truth = truth_items[item.name]
+            assert (item.width, item.height) == (truth.width, truth.height)
+            assert abs(item.duration - truth.duration) < 1e-5
+            assert abs(item.frame_rate - truth.frame_rate) < 1e-5
+            assert (
+                item.main_source._sspc.source_format_type
+                == truth.main_source._sspc.source_format_type
+            )
+            assert len(item.main_source._opti.data) == len(truth.main_source._opti.data)
+            if item.main_source._sspc.source_format_type == "sDPX":
+                assert item.main_source._opti.data == truth.main_source._opti.data
+            assert item.main_source.has_alpha == truth.main_source.has_alpha
+            assert item._idta.label == truth._idta.label
 
 
 class TestImportAiComp:

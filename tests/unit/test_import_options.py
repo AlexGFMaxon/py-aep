@@ -59,7 +59,12 @@ class TestImportOptions:
         ".tga": {ImportAsType.FOOTAGE},
         ".bmp": {ImportAsType.FOOTAGE},
         ".gif": {ImportAsType.FOOTAGE},
+        ".dpx": {ImportAsType.FOOTAGE},
+        ".cin": {ImportAsType.FOOTAGE},
+        ".heic": {ImportAsType.FOOTAGE},
+        ".heif": {ImportAsType.FOOTAGE},
         ".mp3": {ImportAsType.FOOTAGE},
+        ".aif": {ImportAsType.FOOTAGE},
         ".wav": {ImportAsType.FOOTAGE},
         # Layered Photoshop: footage, comp, and comp-cropped.
         ".psd": {

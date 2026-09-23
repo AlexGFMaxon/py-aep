@@ -33,6 +33,14 @@ class TestMediaProbe:
             ("sequence_001.gif", 146, 93, True),
             ("8bits.psd", 25, 26, True),
             ("8bits.psb", 25, 26, True),
+            ("cin.cin", 16, 16, False),
+            ("dpx_8bit_rgb.dpx", 16, 16, False),
+            ("dpx_8bit_rgba.dpx", 16, 16, True),
+            ("dpx_10bit_be.dpx", 16, 16, False),
+            ("dpx_12bit_be.dpx", 16, 16, False),
+            ("dpx_16bit_rgba_be.dpx", 16, 16, True),
+            ("heic.heic", 16, 16, False),
+            ("heic_alpha.heic", 16, 16, True),
         ],
     )
     def test_still_image(
@@ -103,6 +111,13 @@ class TestMediaProbe:
         assert info.frame_rate == pytest.approx(29.97, abs=1e-3)
         assert info.has_audio is False
         assert info.duration == pytest.approx(13.3467, abs=1e-3)
+
+    def test_aif(self) -> None:
+        info = probe_media(ASSETS / "aif.aif")
+        assert info.width == 0 and info.height == 0
+        assert info.has_audio is True
+        assert info.audio_sample_rate == 44100.0
+        assert info.duration == pytest.approx(0.5, abs=1e-5)
 
     def test_mp4_h264(self) -> None:
         # avc1 video + AAC audio, moov ahead of mdat. Values are AE 2026's.
@@ -188,6 +203,38 @@ class TestProbeFormatVariants:
 
         with pytest.raises(ValueError, match="GIF"):
             _probe_gif(BytesIO(b"NOTGIFdata"))
+
+    def test_dpx_bad_signature_raises(self) -> None:
+        from io import BytesIO
+
+        from py_aep.resolvers.media_probe import _probe_dpx_cineon
+
+        with pytest.raises(ValueError, match="DPX/Cineon"):
+            _probe_dpx_cineon(BytesIO(b"NOTDPXdata" * 150))
+
+    def test_dpx_truncated_header_raises(self) -> None:
+        from io import BytesIO
+
+        from py_aep.resolvers.media_probe import _probe_dpx_cineon
+
+        with pytest.raises(ValueError, match="too short"):
+            _probe_dpx_cineon(BytesIO(b"SDPX\x00\x00\x08\x00"))
+
+    def test_heif_bad_ftyp_raises(self) -> None:
+        from io import BytesIO
+
+        from py_aep.resolvers.media_probe import _probe_heif
+
+        with pytest.raises(ValueError, match="HEIF"):
+            _probe_heif(BytesIO(b"\x00\x00\x00\x14ftypmp41\x00\x00\x00\x00mp41"))
+
+    def test_heif_truncated_raises(self) -> None:
+        from io import BytesIO
+
+        from py_aep.resolvers.media_probe import _probe_heif
+
+        with pytest.raises(ValueError, match="too short"):
+            _probe_heif(BytesIO(b"\x00\x00\x00\x08"))
 
     def test_bmp_os2_core_header(self) -> None:
         """Legacy OS/2 BITMAPCOREHEADER (size 12) stores dims as u2."""
@@ -336,6 +383,13 @@ class TestPsdOpti:
 
 class TestGapOptiBuilders:
     """opti builders for the newly supported HDR and TEXT (AI/EPS/PDF) formats."""
+
+    def test_build_dpx_opti_data(self) -> None:
+        from py_aep.binary.footage_chunks import build_dpx_opti_data
+
+        data = build_dpx_opti_data()
+        assert len(data) == 48
+        assert data[:4] == b"sDPX"
 
     def test_build_rhdr_opti_data(self) -> None:
         from py_aep.binary.footage_chunks import build_rhdr_opti_data
