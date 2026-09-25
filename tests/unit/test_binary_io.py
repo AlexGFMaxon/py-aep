@@ -1490,14 +1490,14 @@ class TestPardChunk:
 
         from py_aep.binary.misc_chunks import EnumPardChunk, PardChunk
 
-        body = struct.pack(">Iii", 2, 5, 0)
+        body = struct.pack(">Ihhi", 2, 5, 3, 0)
         data = self._build_pard(7, body)
         buf = BytesIO(data)
         chunk = PardChunk.read(buf, len(data), chunk_type="pard")
         assert isinstance(chunk, EnumPardChunk)
         assert chunk.last_value == 2
         assert chunk.nb_options == 5
-        assert chunk.default == 0
+        assert chunk.default == 3
 
         out = BytesIO()
         chunk.write(out)

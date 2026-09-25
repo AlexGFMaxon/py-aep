@@ -23,6 +23,7 @@ from .fmt_field import (
     f4_field,
     f8_field,
     items_field,
+    s2_field,
     s4_field,
     u1_field,
     u2_field,
@@ -778,15 +779,18 @@ class TwoDPardChunk(PardChunk):
 
 @define
 class EnumPardChunk(PardChunk):
-    """Enum/popup control (type 7): u4 last_value, s4 nb_options, s4 default."""
+    """Enum/popup control (type 7, SDK `PF_PopupDef`): u4 last_value, s2
+    nb_options, s2 1-based default (the SDK's `dephault`), then the names
+    pointer, 0 on disk."""
 
     _pad_pre: bytes = bytes_field(15, repr=False)
     property_control_type: int = u1_field(default=7)
     _raw_name: bytes = bytes_field(32, repr=False)
     _pad_post: bytes = bytes_field(8, repr=False)
     last_value: int = u4_field()
-    nb_options: int = s4_field()
-    default: int = s4_field()
+    nb_options: int = s2_field()
+    default: int = s2_field()
+    _names_ptr: int = s4_field(repr=False)
 
 
 @define

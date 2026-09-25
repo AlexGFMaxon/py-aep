@@ -1852,11 +1852,8 @@ class Property(PropertyBase):
                     current = cast("TdmnChunk", chunk).value
                 elif current == self.match_name:
                     if isinstance(chunk, EnumPardChunk):
-                        # The option count lives in the high 16 bits; AE
-                        # keeps the low 16 bits unchanged.
-                        chunk.nb_options = (len(items) << 16) | (
-                            chunk.nb_options & 0xFFFF
-                        )
+                        # AE keeps the default choice unchanged.
+                        chunk.nb_options = len(items)
                     elif chunk.chunk_type == "pdnm":
                         utf8 = find_by_type(
                             chunks=cast("ContainerChunk", chunk).chunks,

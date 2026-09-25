@@ -31,26 +31,26 @@ class TestResolveEffectValue:
         ("param_def", "control_type", "expected"),
         [
             pytest.param(
-                {"property_control_type": PropertyControlType.ENUM, "default_value": 0},
+                {"property_control_type": PropertyControlType.ENUM, "default_value": 1},
                 PropertyControlType.ENUM,
                 (1, 1),
-                id="enum_default_0_becomes_1",
+                id="enum_default_is_1_based",
             ),
             pytest.param(
-                {"property_control_type": PropertyControlType.ENUM, "default_value": 2},
+                {"property_control_type": PropertyControlType.ENUM, "default_value": 3},
                 PropertyControlType.ENUM,
                 (3, 3),
-                id="enum_default_2_becomes_3",
+                id="enum_default_3_stays_3",
             ),
             pytest.param(
                 {
                     "property_control_type": PropertyControlType.ENUM,
-                    "default_value": 0,
+                    "default_value": 1,
                     "last_value": 5,
                 },
                 PropertyControlType.ENUM,
-                (5, 5),
-                id="enum_last_value_takes_precedence",
+                (1, 1),
+                id="enum_absent_from_tdgp_is_at_its_default",
             ),
             pytest.param(
                 {
@@ -123,7 +123,7 @@ class TestResolveEffectValue:
             pytest.param(
                 {
                     "property_control_type": PropertyControlType.ENUM,
-                    "default_value": 0,
+                    "default_value": 1,
                     "last_value": 2,
                 },
                 PropertyControlType.ENUM,
@@ -204,10 +204,16 @@ class TestPointDefaultPixels:
         from py_aep.parsers.effect import _point_default_pixels
 
         prop = cast(Any, None)
-        assert _point_default_pixels(prop, [256.0, 512.0], (200.0, 100.0)) == [100.0, 100.0]
+        assert _point_default_pixels(prop, [256.0, 512.0], (200.0, 100.0)) == [
+            100.0,
+            100.0,
+        ]
 
     def test_legacy_percentage_of_the_layer(self) -> None:
         from py_aep.parsers.effect import _point_default_pixels
 
         prop = cast(Any, None)
-        assert _point_default_pixels(prop, [25600.0, 25600.0], (1920.0, 1080.0)) == [960.0, 540.0]
+        assert _point_default_pixels(prop, [25600.0, 25600.0], (1920.0, 1080.0)) == [
+            960.0,
+            540.0,
+        ]

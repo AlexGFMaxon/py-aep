@@ -121,15 +121,13 @@ def _resolve_effect_value(
         A (value, default_value) tuple.
     """
     if control_type == PropertyControlType.ENUM:
-        # parT stores a 0-indexed default; ExtendScript uses 1-indexed.
-        default = param_def.get("default_value", 0) + 1
-        if borrowed:
-            return default, default
-        # last_value from the instance's own parT is already 1-indexed and
-        # reflects the current value even when the property is absent from
-        # tdgp.
-        value = param_def.get("last_value", default)
-        return value, value
+        # parT stores a 1-indexed default, like the value. A popup absent
+        # from tdgp is at it, even in the instance's own parT, whose
+        # last_value can be stale: two S_BlurDirectional popups in
+        # 29.97_fps_time_scale_3.125 store last_value 1 where AE reports
+        # their defaults, 3 and 2.
+        default = param_def.get("default_value", 1)
+        return default, default
     if control_type == PropertyControlType.BOOLEAN:
         value = param_def.get("default_value", param_def.get("last_value"))
         return value, value
@@ -308,8 +306,7 @@ def _merge_param_def(prop: Property, param_def: dict[str, Any]) -> None:
         # directly for the one case that needs it (a cloned EfdG effect).
         prop.default_value = None
     elif param_def["property_control_type"] == PropertyControlType.ENUM:
-        # 0-indexed in the pard, 1-indexed like the value.
-        prop.default_value = param_def.get("default_value", 0) + 1
+        prop.default_value = param_def.get("default_value", 1)
     elif param_def["property_control_type"] != PropertyControlType.LAYER:
         prop.default_value = param_def.get("default_value")
     _apply_param_def_metadata(prop, param_def)
@@ -642,10 +639,12 @@ def _extract_color(body: Any, result: dict[str, Any]) -> None:
 @_pard_extractor(PropertyControlType.ENUM)
 def _extract_enum(body: Any, result: dict[str, Any]) -> None:
     result["last_value"] = body.last_value
-    # nb_options is stored with the count in the high 16 bits
-    nb_options = body.nb_options >> 16
+    # 1-based like the value. The names pointer after it, always 0 on disk,
+    # used to be read as the default: a borrowed popup left at its default
+    # read as the first choice (Glow's Glow Operation as None, not Add).
+    nb_options = body.nb_options
     result["nb_options"] = nb_options
-    result["default_value"] = body.default
+    result["default_value"] = body.default or 1
     result["min_value"] = 1
     result["max_value"] = nb_options
 

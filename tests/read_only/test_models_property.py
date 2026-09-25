@@ -524,6 +524,32 @@ class TestEffectProperties:
                                 return
         pytest.fail("S_BlurDirectional 'Matte from Path' property not found")
 
+    @pytest.mark.parametrize(
+        ("match_name", "expected"),
+        [("S_BlurDirectional-0063", 3), ("S_BlurDirectional-0068", 2)],
+    )
+    def test_popup_absent_from_tdgp_is_at_its_default(
+        self, match_name: str, expected: int
+    ) -> None:
+        """A popup the effect does not store reads the pard's 1-based default.
+
+        The effect's own parT stores `last_value` 1 for both, stale: AE 2026
+        reports their defaults, unmodified.
+        """
+        project = parse_project(BUGS_DIR / "29.97_fps_time_scale_3.125.aep")
+        for comp in project.compositions:
+            for layer in comp.layers:
+                for effect in layer.effects or []:
+                    if effect.match_name != "S_BlurDirectional":
+                        continue
+                    prop = effect[match_name]
+                    assert isinstance(prop, Property)
+                    assert prop.value == expected
+                    assert prop.default_value == expected
+                    assert not prop.is_modified
+                    return
+        pytest.fail("S_BlurDirectional not found")
+
 
 class TestMasks:
     """Tests for mask property groups."""
@@ -570,7 +596,9 @@ class TestMasks:
         layer = next(layer for layer in comp.layers if layer.name == layer_name)
         assert layer.masks is not None
         shape = layer.masks.properties[0].property("ADBE Mask Shape").value
-        assert shape.vertices == pytest.approx(expected, abs=1e-4)
+        assert len(shape.vertices) == len(expected)
+        for vertex, want in zip(shape.vertices, expected):
+            assert vertex == pytest.approx(want, abs=1e-4)
 
     def test_no_masks(self) -> None:
         """Layer without masks has an empty (falsy) mask parade."""
@@ -2215,16 +2243,18 @@ class TestAnchorPointNormalization:
             ("shape", [10.0, 20.0, 30.0]),
         ],
     )
-    def test_static_anchor_point(
-        self, layer_name: str, expected: list[float]
-    ) -> None:
-        comp = get_comp(parse_aep(SAMPLES_DIR / "anchor_point_z.aep").project, "anchor_z")
+    def test_static_anchor_point(self, layer_name: str, expected: list[float]) -> None:
+        comp = get_comp(
+            parse_aep(SAMPLES_DIR / "anchor_point_z.aep").project, "anchor_z"
+        )
         layer = next(layer for layer in comp.layers if layer.name == layer_name)
         anchor = layer.property("ADBE Transform Group").property("ADBE Anchor Point")
         assert anchor.value == pytest.approx(expected)
 
     def test_animated_anchor_point(self) -> None:
-        comp = get_comp(parse_aep(SAMPLES_DIR / "anchor_point_z.aep").project, "anchor_z")
+        comp = get_comp(
+            parse_aep(SAMPLES_DIR / "anchor_point_z.aep").project, "anchor_z"
+        )
         layer = next(layer for layer in comp.layers if layer.name == "solid_animated")
         anchor = layer.property("ADBE Transform Group").property("ADBE Anchor Point")
         assert [kf.value for kf in anchor.keyframes] == [
