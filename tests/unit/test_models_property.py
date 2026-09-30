@@ -8,9 +8,15 @@ from typing import Any, cast
 import pytest
 
 from py_aep.binary.chunk import ListChunk
+from py_aep.binary.misc_chunks import ThreeDPardChunk, TwoDPardChunk
 from py_aep.binary.property_chunks import TdmnChunk, TdsnChunk
 from py_aep.enums import (
     PropertyControlType,
+)
+from py_aep.parsers.effect import (
+    _extract_point_default,
+    _point_default_pixels,
+    _resolve_effect_value,
 )
 from py_aep.parsers.property import parse_property_group
 
@@ -25,7 +31,11 @@ PROPERTY_SAMPLES_DIR = (
 
 
 class TestResolveEffectValue:
-    """Tests for _resolve_effect_value pure helper."""
+    """Tests for _resolve_effect_value pure helper.
+
+    A synthesized parameter is one the effect does not store, so it is at
+    its pard default; `last_value` is another instance's, or stale.
+    """
 
     @pytest.mark.parametrize(
         ("param_def", "control_type", "expected"),
@@ -50,25 +60,17 @@ class TestResolveEffectValue:
                 },
                 PropertyControlType.ENUM,
                 (1, 1),
-                id="enum_absent_from_tdgp_is_at_its_default",
+                id="enum_ignores_last_value",
             ),
             pytest.param(
                 {
                     "property_control_type": PropertyControlType.BOOLEAN,
                     "default_value": 1,
-                },
-                PropertyControlType.BOOLEAN,
-                (1, 1),
-                id="boolean_default_value",
-            ),
-            pytest.param(
-                {
-                    "property_control_type": PropertyControlType.BOOLEAN,
                     "last_value": 0,
                 },
                 PropertyControlType.BOOLEAN,
-                (0, 0),
-                id="boolean_falls_back_to_last_value",
+                (1, 1),
+                id="boolean_ignores_last_value",
             ),
             pytest.param(
                 {
@@ -77,17 +79,8 @@ class TestResolveEffectValue:
                     "default_value": 10.0,
                 },
                 PropertyControlType.SCALAR,
-                (42.0, 10.0),
-                id="general_last_value_preferred",
-            ),
-            pytest.param(
-                {
-                    "property_control_type": PropertyControlType.SCALAR,
-                    "default_value": 10.0,
-                },
-                PropertyControlType.SCALAR,
                 (10.0, 10.0),
-                id="general_falls_back_to_default",
+                id="general_prefers_the_default",
             ),
             pytest.param(
                 {"property_control_type": PropertyControlType.SCALAR},
@@ -102,7 +95,17 @@ class TestResolveEffectValue:
                 },
                 PropertyControlType.SCALAR,
                 (7.0, 7.0),
-                id="general_default_falls_back_to_value",
+                id="general_last_value_only_without_a_default",
+            ),
+            pytest.param(
+                {
+                    "property_control_type": PropertyControlType.TWO_D,
+                    "last_value": [128.0, 256.0],
+                    "default_value": [256.0, 512.0],
+                },
+                PropertyControlType.TWO_D,
+                ([256.0, 512.0], [256.0, 512.0]),
+                id="point_prefers_the_default",
             ),
         ],
     )
@@ -112,61 +115,7 @@ class TestResolveEffectValue:
         control_type: PropertyControlType,
         expected: tuple[Any, Any],
     ) -> None:
-        from py_aep.parsers.effect import _resolve_effect_value
-
         result = _resolve_effect_value("TEST-0001", param_def, control_type)
-        assert result == expected
-
-    @pytest.mark.parametrize(
-        ("param_def", "control_type", "expected"),
-        [
-            pytest.param(
-                {
-                    "property_control_type": PropertyControlType.ENUM,
-                    "default_value": 1,
-                    "last_value": 2,
-                },
-                PropertyControlType.ENUM,
-                (1, 1),
-                id="enum_ignores_another_instances_choice",
-            ),
-            pytest.param(
-                {
-                    "property_control_type": PropertyControlType.SCALAR,
-                    "last_value": 42.0,
-                    "default_value": 10.0,
-                },
-                PropertyControlType.SCALAR,
-                (10.0, 10.0),
-                id="general_prefers_the_default",
-            ),
-            pytest.param(
-                {
-                    "property_control_type": PropertyControlType.TWO_D,
-                    "last_value": [128.0, 256.0],
-                },
-                PropertyControlType.TWO_D,
-                ([128.0, 256.0], [128.0, 256.0]),
-                id="point_without_default_keeps_last_value",
-            ),
-        ],
-    )
-    def test_resolve_borrowed_effect_value(
-        self,
-        param_def: dict[str, Any],
-        control_type: PropertyControlType,
-        expected: tuple[Any, Any],
-    ) -> None:
-        """A later instance of an effect type borrows the first one's parT.
-
-        Its last values are that instance's, so a property the later
-        instance does not store resolves to its default instead.
-        """
-        from py_aep.parsers.effect import _resolve_effect_value
-
-        result = _resolve_effect_value(
-            "TEST-0001", param_def, control_type, borrowed=True
-        )
         assert result == expected
 
 
@@ -196,24 +145,46 @@ class TestTdsnWithoutUtf8:
 
 
 class TestPointDefaultPixels:
-    """parT point defaults are a fraction of the layer times 512, or, in
-    effect definitions carried over from old projects, a percentage times
-    512 (CC Radial Fast Blur's untouched Center in a CC 2013 project)."""
+    """parT point values are a fraction of the layer times 512."""
 
     def test_fraction_of_the_layer(self) -> None:
-        from py_aep.parsers.effect import _point_default_pixels
-
         prop = cast(Any, None)
         assert _point_default_pixels(prop, [256.0, 512.0], (200.0, 100.0)) == [
             100.0,
             100.0,
         ]
 
-    def test_legacy_percentage_of_the_layer(self) -> None:
-        from py_aep.parsers.effect import _point_default_pixels
 
-        prop = cast(Any, None)
-        assert _point_default_pixels(prop, [25600.0, 25600.0], (1920.0, 1080.0)) == [
-            960.0,
-            540.0,
-        ]
+class TestPointPardDefault:
+    """A point pard's default is PF_PointDef's dephault, percentages of the
+    layer (16.16 fixed in 2D, doubles in 3D)."""
+
+    def test_two_d_default_is_a_percentage_of_the_layer(self) -> None:
+        # CC Radial Fast Blur's Center in a CC 2013 project: last value
+        # 25600 (100 times a fraction's), default 50%.
+        body = TwoDPardChunk(
+            last_value_x_raw=25600 * 128,
+            last_value_y_raw=25600 * 128,
+            default_x_raw=50 << 16,
+            default_y_raw=50 << 16,
+        )
+        result: dict[str, Any] = {}
+        _extract_point_default(body, result)
+        default = _point_default_pixels(
+            cast(Any, None), result["default_value"], (1920.0, 1080.0)
+        )
+        assert default == pytest.approx([960.0, 540.0])
+
+    def test_three_d_default_z_is_a_percentage_of_the_height(self) -> None:
+        body = ThreeDPardChunk(default_x=50.0, default_y=25.0, default_z=10.0)
+        result: dict[str, Any] = {}
+        _extract_point_default(body, result)
+        default = _point_default_pixels(
+            cast(Any, None), result["default_value"], (200.0, 100.0)
+        )
+        assert default == pytest.approx([100.0, 25.0, 10.0])
+
+    def test_a_pard_without_a_default_declares_none(self) -> None:
+        result: dict[str, Any] = {}
+        _extract_point_default(TwoDPardChunk(), result)
+        assert "default_value" not in result

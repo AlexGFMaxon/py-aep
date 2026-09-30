@@ -252,7 +252,7 @@ class Shape:
         """
         if self._layer is None:
             return None
-        if type(self._layer).__name__ in ("ShapeLayer", "TextLayer"):
+        if not self._layer._has_source:
             return None
         layer = cast("AVLayer", self._layer)
         return (float(layer.width), float(layer.height))

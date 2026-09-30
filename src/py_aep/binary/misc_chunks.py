@@ -759,7 +759,10 @@ class BooleanPardChunk(PardChunk):
 
 @define
 class TwoDPardChunk(PardChunk):
-    """2D point control (type 6): s4 last_value_x_raw, s4 last_value_y_raw."""
+    """2D point control (type 6, SDK `PF_PointDef`): s4 last_value_x_raw,
+    s4 last_value_y_raw, 3 reserved bytes, u1 restrict_bounds, then the
+    16.16 fixed default x / y (`x_dephault`, `y_dephault`), as percentages
+    of the layer."""
 
     _pad_pre: bytes = bytes_field(15, repr=False)
     property_control_type: int = u1_field(default=6)
@@ -767,6 +770,17 @@ class TwoDPardChunk(PardChunk):
     _pad_post: bytes = bytes_field(8, repr=False)
     last_value_x_raw: int = s4_field()
     last_value_y_raw: int = s4_field()
+    _reserved: bytes | None = bytes_field(3, repr=False, optional=True, default=None)
+    restrict_bounds: int | None = u1_field(optional=True, default=None)
+    default_x_raw: int | None = s4_field(optional=True, default=None)
+    default_y_raw: int | None = s4_field(optional=True, default=None)
+
+    @property
+    def default_percent(self) -> list[float] | None:
+        """The default point, as percentages of the layer's size."""
+        if self.default_x_raw is None or self.default_y_raw is None:
+            return None
+        return [self.default_x_raw / 65536.0, self.default_y_raw / 65536.0]
 
     @property
     def last_value_x(self) -> float:
@@ -831,7 +845,8 @@ class SliderPardChunk(PardChunk):
 
 @define
 class ThreeDPardChunk(PardChunk):
-    """3D point control (type 18): 3x f8 for x/y/z raw values."""
+    """3D point control (type 18, SDK `PF_Point3DDef`): 3x f8 for x/y/z raw
+    values, then 3x f8 default x/y/z, as percentages of the layer."""
 
     _pad_pre: bytes = bytes_field(15, repr=False)
     property_control_type: int = u1_field(default=18)
@@ -840,6 +855,17 @@ class ThreeDPardChunk(PardChunk):
     last_value_x_raw: float = f8_field()
     last_value_y_raw: float = f8_field()
     last_value_z_raw: float = f8_field()
+    default_x: float | None = f8_field(optional=True, default=None)
+    default_y: float | None = f8_field(optional=True, default=None)
+    default_z: float | None = f8_field(optional=True, default=None)
+
+    @property
+    def default_percent(self) -> list[float] | None:
+        """The default point (SDK `PF_Point3DDef`'s `x/y/z_dephault`), as
+        percentages of the layer's size, Z of its height."""
+        if self.default_x is None or self.default_y is None or self.default_z is None:
+            return None
+        return [self.default_x, self.default_y, self.default_z]
 
     @property
     def last_value_x(self) -> float:

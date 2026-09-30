@@ -376,6 +376,17 @@ class Layer(PropertyGroup):
         return False
 
     @property
+    def _has_source(self) -> bool:
+        """Whether the layer has a source item.
+
+        A layer without one (shape, text, null) keeps its anchor point and
+        masks in pixels around the layer origin, where a footage or comp
+        layer normalizes them to its source size - though AE reports the
+        comp's size as a source-less layer's width and height.
+        """
+        return getattr(self, "source", None) is not None
+
+    @property
     def _pixel_size(self) -> tuple[float, float] | None:
         """The layer's pixel dimensions, for denormalizing effect points.
 

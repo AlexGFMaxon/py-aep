@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 from py_aep.data.builtin_effects import BUILTIN_EFFECTS
 from py_aep.data.effect_controls import EXPRESSION_CONTROLS
 from py_aep.data.match_names import MATCH_NAME_TO_AUTO_NAME
-from py_aep.enums import PropertyControlType, PropertyType
+from py_aep.enums import PropertyType
 from py_aep.resolvers.can_add_property import AddableKind, resolve_addable
 from py_aep.resolvers.can_add_property import (
     can_add_property as _can_add_property,
@@ -169,15 +169,7 @@ def _reset_to_default_values(group: PropertyGroup) -> None:
     expression, then leaves whose value still differs from the `pard`
     default are reset. Leaves with no known default keep their value but
     are still de-animated / de-expressioned.
-
-    2D/3D point params carry no `default` field in their `pard`, so their
-    reset target is the `last_value` AE stamps into the `parT` (in the
-    same 0-512 layer-relative range a synthesized point uses). It is read
-    here rather than published as `default_value`, because on a parsed
-    project that number is the instance's own coordinate, not a default.
     """
-    from ...parsers.effect import _point_default_pixels  # noqa: PLC0415
-
     for child in group.properties:
         if isinstance(child, PropertyGroup):
             _reset_to_default_values(child)
@@ -187,11 +179,6 @@ def _reset_to_default_values(group: PropertyGroup) -> None:
         child.remove_all_keys()
         child._clear_expression()
         default = child.default_value
-        if default is None and child._property_control_type in (
-            PropertyControlType.TWO_D,
-            PropertyControlType.THREE_D,
-        ):
-            default = _point_default_pixels(child, child.last_value)
         if default is not None and not _values_equal(child.value, default):
             # Use the parse-path writer, not the public `value` setter: an
             # enum/popup leaf's stored default can sit below its own pard min
