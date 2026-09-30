@@ -5,17 +5,19 @@ chunk (see `CurvesArbpChunk` for the layout): a mode, then per channel (the
 RGB master, red, green, blue, alpha) a 256-entry map and its points.
 
 A curve through points is the natural cubic spline through them (second
-derivative 0 at both ends, a straight line through two points). It is flat
-beyond the first and last points, and clamped to 0..1 in 8 and 16 bpc. The
-master applies after a channel's own curve,
-`out = master(channel(in))`. Alpha has its own curve, and colour is never
-unpremultiplied.
+derivative 0 at both ends, a straight line through two points), flat
+beyond the first and last points. Rounded, it gives the map AE stores to
+within one level: of 101 edited point-mode channels, 96 match exactly and
+5 differ by one level, at exact half-level ties on two-point lines (AE's
+float32 evaluation lands on the other side of the tie).
 """
 
 from __future__ import annotations
 
 import math
 from typing import TYPE_CHECKING
+
+from ..validators import validate_number
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -96,11 +98,14 @@ class CurvesChannel:
         points: list[tuple[int, int]],
         lut: bytes,
         selected: int,
+        uses_points: bool = True,
     ) -> None:
         self._name = name
         self._points = points
         self._map = lut
-        self._selected = selected
+        # AE leaves junk here at times (0x9200FF with 3 points).
+        self._selected = selected if 0 <= selected < len(points) else -1
+        self._uses_points = uses_points
         self._spline: _NaturalSpline | None = None
 
     @property
@@ -125,10 +130,22 @@ class CurvesChannel:
 
     @property
     def is_identity(self) -> bool:
-        """Whether the curve leaves every level unchanged."""
-        return all(v == i for i, v in enumerate(self._map)) and all(
-            x == y for x, y in self._points
-        )
+        """Whether the curve leaves every level unchanged.
+
+        Drawn with the pencil, the map is the curve and the points are
+        stale, so only the map counts.
+        """
+        map_is_identity = all(v == i for i, v in enumerate(self._map))
+        if not self._uses_points:
+            return map_is_identity
+        return map_is_identity and all(x == y for x, y in self._points)
+
+    def _same_curve(self, other: CurvesChannel) -> bool:
+        """Whether this curve is `other`'s: the same points when both go
+        through theirs, else the same map (what a pencil curve renders)."""
+        if self._uses_points and other._uses_points:
+            return self._points == other._points
+        return self._map == other._map
 
     def spline(self) -> _NaturalSpline:
         """The natural cubic spline through the points, in 0..255 on both axes."""
@@ -143,28 +160,38 @@ class CurvesChannel:
 class Curves:
     """The five curves of a Curves effect.
 
-    Read-only: py-aep does not write curves back to the project.
+    Read-only: py-aep does not write curves back to the project, and reads
+    them from one ([Property.value][] or [Keyframe.value][]).
     """
 
-    def __init__(self) -> None:
-        self._version = 1
-        self._mode = 1
-        self._channels: dict[str, CurvesChannel] = {}
+    _version: int
+    _mode: int
+    _channels: dict[str, CurvesChannel]
 
     @classmethod
     def _from_binary(cls, chunk: CurvesArbpChunk) -> Curves:
         """Build the curves from a Curves effect's aRbp layout."""
-        obj = cls()
+        obj = cls.__new__(cls)
         obj._version = chunk.version
         obj._mode = chunk.mode
+        obj._channels = {}
         for c, (name, record) in enumerate(zip(CURVES_CHANNELS, chunk.records)):
             lut = chunk.maps[256 * c : 256 * (c + 1)]
             points = record.points
             if len(points) < 2:
                 # Nothing usable: the channel's map is all there is.
                 points = [(0, lut[0]), (255, lut[255])]
-            obj._channels[name] = CurvesChannel(name, points, lut, record.selected)
+            obj._channels[name] = CurvesChannel(
+                name, points, lut, record.selected, obj.uses_points
+            )
         return obj
+
+    def _same_curves(self, other: Curves) -> bool:
+        """Whether these curves are `other`'s, channel by channel (the
+        bytes differ by the stale points and junk AE leaves)."""
+        return all(
+            ch._same_curve(other._channels[name]) for name, ch in self._channels.items()
+        )
 
     @property
     def version(self) -> int:
@@ -195,8 +222,19 @@ class Curves:
 
     def evaluate(self, channel: str, x: float, clamp: bool = True) -> float:
         """One channel's curve at `x` in 0..1, on its own (not through the
-        master), as 16 bpc renders it. `clamp=False` leaves the spline's
-        overshoot as 32 bpc does between the points."""
+        master): the spline through its points, or its map read linearly
+        when drawn with the pencil. Clamped to 0..1 unless `clamp` is
+        `False`, which leaves the spline's overshoot between the points.
+
+        Raises:
+            ValueError: If `channel` is not one of `CURVES_CHANNELS`, or `x`
+                is not a finite number.
+        """
+        if channel not in CURVES_CHANNELS:
+            raise ValueError(
+                f"channel must be one of {', '.join(CURVES_CHANNELS)}, not {channel!r}"
+            )
+        validate_number(x)
         ch = self._channels[channel]
         if self.uses_points:
             y = ch.spline()(x * 255.0) / 255.0

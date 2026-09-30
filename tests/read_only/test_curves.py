@@ -52,7 +52,7 @@ def test_untouched_curves_are_identity() -> None:
     assert curves.is_identity
 
 
-def test_pencil_curve_reads_its_map() -> None:
+def test_pencil_curve_decodes_its_map() -> None:
     curves = _curves_property("pencil").value
     assert isinstance(curves, Curves)
     assert not curves.uses_points
@@ -60,11 +60,17 @@ def test_pencil_curve_reads_its_map() -> None:
         "rgb"
     ]
     rgb = curves.channels["rgb"]
-    # Pencil mode renders the map, read linearly between levels.
-    for level in (0, 64, 128, 200, 255):
-        assert curves.evaluate("rgb", level / 255.0) == pytest.approx(
-            rgb.map[level] / 255.0
-        )
+    # The first levels of the master map as drawn in AE 2026.
+    assert rgb.map[:12] == [1, 7, 12, 18, 24, 29, 35, 40, 45, 50, 55, 60]
+    # Read linearly between levels: halfway from level 0 (1) to 1 (7).
+    assert curves.evaluate("rgb", 0.5 / 255.0) == pytest.approx(4.0 / 255.0)
+
+
+def test_untouched_curves_equal_the_parT_default() -> None:
+    prop = _curves_property("untouched")
+    assert prop._default_arbp is not None
+    assert prop._arbp is not None
+    assert prop._arbp.data == prop._default_arbp.data
 
 
 def test_curves_are_read_only() -> None:
