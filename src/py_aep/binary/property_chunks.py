@@ -546,6 +546,11 @@ class TdsnChunk(ContainerChunk):
         # the match name, as for the sentinel.
         return text or TDSN_SENTINEL
 
+    @classmethod
+    def _legacy_string(cls, value: str) -> str:
+        # And an unnamed property is written back as the empty name.
+        return "" if value == TDSN_SENTINEL else value
+
     @property
     def utf8(self) -> Utf8Chunk:
         """The `Utf8` child holding the display name.
