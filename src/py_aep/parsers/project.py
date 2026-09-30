@@ -96,11 +96,15 @@ def parse_project(
     # settings come from nhed, and the others take their defaults. The
     # stand-ins are synthetic, so the file is written back without them.
     try:
-        nnhd_chunk = cast("NnhdChunk", find_by_type(chunks=root_chunks, chunk_type="nnhd"))
+        nnhd_chunk = cast(
+            "NnhdChunk", find_by_type(chunks=root_chunks, chunk_type="nnhd")
+        )
     except ChunkNotFoundError:
         nnhd_chunk = _nnhd_from_nhed(nhed_chunk)
     try:
-        dwga_chunk = cast("DwgaChunk", find_by_type(chunks=root_chunks, chunk_type="dwga"))
+        dwga_chunk = cast(
+            "DwgaChunk", find_by_type(chunks=root_chunks, chunk_type="dwga")
+        )
     except ChunkNotFoundError:
         dwga_chunk = DwgaChunk(synthetic=True)
     try:

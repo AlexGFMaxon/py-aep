@@ -9,11 +9,18 @@ from __future__ import annotations
 
 import struct
 from io import BytesIO
+from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+
+from py_aep import Project, parse
 from py_aep.binary.chunk import ContainerChunk, read_chunks, write_chunk
 from py_aep.binary.item_chunks import NhedChunk
+from py_aep.binary.misc_chunks import DwgaChunk
 from py_aep.binary.property_chunks import TDSN_SENTINEL, TdsnChunk
 from py_aep.binary.scalar_chunks import Utf8Chunk
+from py_aep.enums import BitsPerChannel
 from py_aep.parsers.project import _nnhd_from_nhed
 
 
@@ -34,7 +41,9 @@ def _write(chunks: list) -> bytes:
 
 
 def test_a_one_byte_tdsn_does_not_swallow_the_next_chunk() -> None:
-    data = _chunk("tdsn", b"\x00") + _chunk("tdmn", b"ADBE Transform Group".ljust(40, b"\x00"))
+    data = _chunk("tdsn", b"\x00") + _chunk(
+        "tdmn", b"ADBE Transform Group".ljust(40, b"\x00")
+    )
     chunks = _read(data)
     assert [c.chunk_type for c in chunks] == ["tdsn", "tdmn"]
     tdsn = chunks[0]
@@ -84,4 +93,87 @@ def test_nnhd_stands_in_from_nhed() -> None:
     nhed.timecode_default_base = 25
     nnhd = _nnhd_from_nhed(nhed)
     assert nnhd.synthetic
-    assert (nnhd.bits_per_channel, nnhd.frames_count_type, nnhd.timecode_default_base) == (1, 1, 25)
+    assert (
+        nnhd.bits_per_channel,
+        nnhd.frames_count_type,
+        nnhd.timecode_default_base,
+    ) == (1, 1, 25)
+
+
+def test_a_legacy_fnam_with_a_four_letter_name_reads_its_string() -> None:
+    # "Fill" then NUL padding also reads as a `Fill` header of length 0; the
+    # NUL headers after it are not chunks.
+    for name in (b"Fill", b"Glow", b"Tint", b"Blur"):
+        data = _chunk("fnam", name.ljust(48, b"\x00"))
+        (fnam,) = _read(data)
+        (utf8,) = fnam.chunks
+        assert utf8.value == name.decode()
+        assert utf8.synthetic
+        assert _write([fnam]) == data
+
+
+def test_a_renamed_one_byte_tdsn_grows_to_its_name() -> None:
+    (tdsn,) = _read(_chunk("tdsn", b"\x00"))
+    tdsn.utf8.value = "My Name"
+    assert _write([tdsn]) == _chunk("tdsn", b"My Name\x00")
+
+
+def test_a_renamed_legacy_tdsn_keeps_whole_characters() -> None:
+    (tdsn,) = _read(_chunk("tdsn", b"abc\x00"))
+    tdsn.utf8.value = "abcdef\u00e9"
+    assert _write([tdsn]) == _chunk("tdsn", "abcdef\u00e9".encode() + b"\x00")
+
+
+def test_a_legacy_tdsn_reset_to_unnamed_writes_the_empty_name() -> None:
+    (tdsn,) = _read(_chunk("tdsn", b"Mask 1\x00"))
+    tdsn.utf8.value = TDSN_SENTINEL
+    assert _write([tdsn]) == _chunk("tdsn", b"\x00")
+
+
+def test_a_renamed_legacy_pdnm_grows_to_its_items() -> None:
+    (pdnm,) = _read(_chunk("pdnm", b"On|Off\x00"))
+    pdnm.chunks[0].value = "On|Off|Auto"
+    assert _write([pdnm]) == _chunk("pdnm", b"On|Off|Auto\x00")
+
+
+def test_a_legacy_fnam_too_long_for_its_buffer_raises() -> None:
+    (fnam,) = _read(_chunk("fnam", b"Glow".ljust(48, b"\x00")))
+    fnam.chunks[0].value = "x" * 48
+    with pytest.raises(ValueError, match="48-byte fnam"):
+        _write([fnam])
+
+
+SAMPLE = (
+    Path(__file__).parent.parent.parent
+    / "samples"
+    / "versions"
+    / "ae2026"
+    / "complete.aep"
+)
+
+
+def _as_cc12_project() -> Project:
+    """A project with the stand-ins a CC 12.0 one parses with: no nnhd or
+    dwga, a head of AE 12."""
+    project = parse(SAMPLE).project
+    project._nnhd = _nnhd_from_nhed(project._nhed)
+    project._dwga = DwgaChunk(synthetic=True)
+    project._head = SimpleNamespace(ae_version_major=12)
+    return project
+
+
+def test_cc12_settings_synced_to_nhed_write_through() -> None:
+    project = _as_cc12_project()
+    project.bits_per_channel = BitsPerChannel.SIXTEEN
+    assert project.bits_per_channel == BitsPerChannel.SIXTEEN
+    assert project._nhed.bits_per_channel == project._nnhd.bits_per_channel
+    assert project._nnhd.synthetic
+
+
+@pytest.mark.parametrize(
+    ("name", "value"), [("working_gamma", 2.4), ("_timecode_default_base", 30)]
+)
+def test_cc12_settings_with_nowhere_to_go_raise(name: str, value: float) -> None:
+    project = _as_cc12_project()
+    with pytest.raises(AttributeError, match="requires AE 13"):
+        setattr(project, name, value)

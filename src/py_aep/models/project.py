@@ -226,6 +226,8 @@ class Project:
         "_nnhd",
         "timecode_default_base",
         validate=_validate_number(min=1, max=999, integer=True),
+        # No nhed field syncs it: in a CC 12.0 project it would be lost.
+        min_version=13,
     )
     """The Default Base value in the Time Display Style section of
     the Project Settings dialog, under Timecode. Read/Write."""
@@ -307,6 +309,8 @@ class Project:
         "_dwga",
         "working_gamma",
         validate=validate_one_of((2.2, 2.4)),
+        # A CC 12.0 project has no dwga to keep it in.
+        min_version=13,
     )
     """The gamma value used for the working color space, either 2.2 or 2.4.
     Read / Write."""
@@ -670,6 +674,17 @@ class Project:
 
     def _sync_nhed_field(self, field_name: str) -> None:
         setattr(self._nhed, field_name, getattr(self._nnhd, field_name))
+
+    def _ensure_materialized(self) -> None:
+        """Keep the stand-ins for root chunks older projects lack synthetic.
+
+        An AE CC 12.0 project has no nnhd, dwga or gpuG; the parser stands in
+        synthetic ones (see `parse_project`), which `ChunkField` writes land
+        on. They stay out of the file: an nnhd setting persists through the
+        nhed it syncs to, and the settings with no older counterpart
+        (`working_gamma`, `gpu_accel_type`, `_timecode_default_base`) are
+        gated by `min_version` instead of being dropped on save.
+        """
 
     @property
     def linear_blending(self) -> bool:
