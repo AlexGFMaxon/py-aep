@@ -178,14 +178,8 @@ def _set_transform_defaults(layer: Layer, ae_major: int) -> None:
 
     position = [comp_w / 2.0, comp_h / 2.0, 0.0]
     if isinstance(layer, CameraLayer):
-        # A camera's default Position is its Zoom in front of the comp centre,
-        # following the current Zoom (pre-expression, at time 0). AE leaves a
-        # Position still there out of the file and places the camera from the
-        # Zoom on open (measured on AE 2026, also after the Zoom was later
-        # keyframed or given an expression).
-        options = cast("PropertyGroup", layer["ADBE Camera Options Group"])
-        zoom = cast("float", cast("Property", options["ADBE Camera Zoom"]).value)
-        position[2] = -zoom
+        # A camera's default Position is its Zoom in front of the comp centre.
+        position = layer._default_position()
     elif isinstance(layer, LightLayer):
         # A light's default Position sits up, right and in front of the comp
         # centre, at fixed fractions of the comp's default camera zoom rather
@@ -269,6 +263,14 @@ def _set_transform_defaults(layer: Layer, ae_major: int) -> None:
         tail_mode="none",
         ae_major=ae_major,
     )
+
+    if isinstance(layer, CameraLayer):
+        # The default follows the Zoom as it changes, not the Zoom at parse.
+        camera = layer
+        leader = cast("Property", transform["ADBE Position"])
+        leader._default_value_source = camera._default_position
+        z_follower = cast("Property", transform["ADBE Position_2"])
+        z_follower._default_value_source = lambda: camera._default_position()[2]
 
     # For null layers where opacity was already parsed from binary,
     # override the value to 0 (matching ExtendScript behavior).
