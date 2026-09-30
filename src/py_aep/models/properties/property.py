@@ -109,6 +109,7 @@ from .property_base import PropertyBase
 from .shape import Shape
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from typing import Any
 
     from ...binary.chunk import Chunk
@@ -358,9 +359,6 @@ class Property(PropertyBase):
 
     keyframes: list[Keyframe]
     """The list of keyframes for this property. Read-only."""
-
-    default_value: Any
-    """The default value of the property."""
 
     dimensions = ChunkField[int](
         "_tdb4",
@@ -733,6 +731,9 @@ class Property(PropertyBase):
 
         self._units_text = units_text
 
+        # A default that follows other state (a camera's Position follows its
+        # Zoom) reads from this callable instead of `_default_value`.
+        self._default_value_source: Callable[[], Any] | None = None
         self.default_value = None
 
         self.expression_error = ""
@@ -1560,6 +1561,18 @@ class Property(PropertyBase):
         if any(follower is None for follower in followers):
             return None
         return cast("list[Property]", followers)
+
+    @property
+    def default_value(self) -> Any:
+        """The default value of the property."""
+        if self._default_value_source is not None:
+            return self._default_value_source()
+        return self._default_value
+
+    @default_value.setter
+    def default_value(self, value: Any) -> None:
+        self._default_value = value
+        self._default_value_source = None
 
     @property
     def value(self) -> _ValueType:

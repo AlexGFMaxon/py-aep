@@ -2089,6 +2089,9 @@ class Project:
                 allowed while saving is experimental.
         """
         validate_path_does_not_exist(path)
+        for comp in self.compositions:
+            for camera in comp.camera_layers:
+                camera._write_out_position_off_zoom()
         path_obj = Path(path)
         path_obj.parent.mkdir(parents=True, exist_ok=True)
         filled = self._fill_relative_path_counts(
