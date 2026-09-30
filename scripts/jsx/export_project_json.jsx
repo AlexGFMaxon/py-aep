@@ -206,11 +206,16 @@ var AepExport = AepExport || {};
             return keyframes;
         }
 
+        // An arbitrary-data key's value (the Curves effect's curves) is not
+        // scriptable, and reading it aborts the whole script in AE 2026
+        // rather than throwing.
+        var customValue = prop.propertyValueType === PropertyValueType.CUSTOM_VALUE;
+
         for (var i = 1; i <= prop.numKeys; i++) {
             var kf = {
                 index: i,
                 time: prop.keyTime(i),
-                value: prop.keyValue(i),
+                value: customValue ? null : prop.keyValue(i),
                 inInterpolationType: prop.keyInInterpolationType(i),
                 outInterpolationType: prop.keyOutInterpolationType(i)
             };

@@ -607,6 +607,8 @@ class Keyframe:
         self,
         value: _ValueType,
     ) -> None:
+        if self._property is not None:
+            self._property._reject_curves_write()
         if not isinstance(
             value,
             (int, float, list, Gradient, MarkerValue, Shape, TextDocument, type(None)),
@@ -616,7 +618,6 @@ class Keyframe:
             )
         prop = self._property
         if prop is not None:
-            prop._reject_curves_write()
             # Reuse the property's value validation (numeric bounds + finite
             # check); it is a no-op for complex value types. Keeps NaN/inf and
             # out-of-range values out of keyframe floats just as `.value=` does.
