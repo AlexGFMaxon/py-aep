@@ -598,6 +598,8 @@ class Keyframe:
         """
         if self._property is None:
             return self._stored_value
+        if self._property._arbp is not None:
+            return self._property._keyframe_curves(self)
         return cast("_ValueType", self._property._mask_inert_z(self._stored_value))
 
     @value.setter
@@ -614,6 +616,7 @@ class Keyframe:
             )
         prop = self._property
         if prop is not None:
+            prop._reject_curves_write()
             # Reuse the property's value validation (numeric bounds + finite
             # check); it is a no-op for complex value types. Keeps NaN/inf and
             # out-of-range values out of keyframe floats just as `.value=` does.
