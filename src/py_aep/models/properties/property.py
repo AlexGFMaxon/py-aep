@@ -1597,6 +1597,28 @@ class Property(PropertyBase):
         index = next(i for i, kf in enumerate(self.keyframes) if kf is keyframe)
         return Curves._from_binary(CurvesArbpChunk.from_arbp(self._arbps[index]))
 
+    def _keyed_curves_at(self, time: float) -> Curves | None:
+        """A keyed Curves effect's curves at composition `time`.
+
+        A key's own curves at the key, and until the next one after a Hold
+        key; the first key's before it and the last key's after it. AE
+        interpolates between linear keys in a way ExtendScript cannot read
+        (reading a Curves key's value aborts the script), so between them
+        this is `None` rather than a guess.
+        """
+        keys = self.keyframes
+        if time <= keys[0].time:
+            return self._keyframe_curves(keys[0])
+        if time >= keys[-1].time:
+            return self._keyframe_curves(keys[-1])
+        previous = next(k for k in reversed(keys) if k.time <= time)
+        if (
+            math.isclose(previous.time, time, rel_tol=0.0, abs_tol=1e-9)
+            or previous.out_interpolation_type == KeyframeInterpolationType.HOLD
+        ):
+            return self._keyframe_curves(previous)
+        return None
+
     def _reject_curves_write(self) -> None:
         """Refuse a write to the Curves effect's curves, which py-aep only reads.
 
@@ -2956,6 +2978,8 @@ class Property(PropertyBase):
             if separated is not None:
                 return separated
             return self._stored_static_value()
+        if self._arbp is not None:
+            return self._keyed_curves_at(time)
 
         kind = self._parallel_kind()
         has_motion_path = self._has_motion_path
