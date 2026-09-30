@@ -14,7 +14,10 @@ from py_aep.models.properties.curves import CURVES_CHANNELS, Curves
 
 
 def _blob(
-    points: dict[str, list[tuple[int, int]]], mode: int = 1, stale: bool = False
+    points: dict[str, list[tuple[int, int]]],
+    mode: int = 1,
+    stale: bool = False,
+    selected: int = -1,
 ) -> bytes:
     """A Curves aRbp as After Effects writes it, the maps left identity."""
     out = bytearray(4 + 5 * 256 + 5 * 72)
@@ -28,7 +31,7 @@ def _blob(
         if stale:
             # After Effects leaves old points past the count.
             struct.pack_into(">hh", out, offset + 4 * len(pts), 5440, 8193)
-        struct.pack_into(">Ii", out, offset + 64, len(pts), -1)
+        struct.pack_into(">Ii", out, offset + 64, len(pts), selected)
     return bytes(out)
 
 
@@ -93,6 +96,36 @@ def test_to_dict_emits_the_curves() -> None:
     assert rgb["points"] == [(0, 0), (168, 93), (255, 246)]
     assert rgb["map"] == list(range(256))
     assert rgb["selected"] == -1
+
+
+def test_junk_selected_point_reads_as_none() -> None:
+    # AE leaves junk here at times: 0x9200FF with 3 points.
+    curves = _curves(_blob({"rgb": [(0, 0), (128, 90), (255, 255)]}, selected=0x9200FF))
+    assert curves.channels["rgb"].selected == -1
+    curves = _curves(_blob({"rgb": [(0, 0), (128, 90), (255, 255)]}, selected=1))
+    assert curves.channels["rgb"].selected == 1
+
+
+def test_pencil_identity_map_with_stale_points_is_identity() -> None:
+    # Drawn with the pencil, only the map counts; the points are stale.
+    curves = _curves(_blob({"rgb": [(0, 0), (128, 40), (255, 255)]}, mode=0))
+    assert curves.channels["rgb"].is_identity
+    assert curves.is_identity
+
+
+def test_same_curves_compares_points_not_bytes() -> None:
+    edited = {"rgb": [(0, 0), (128, 90), (255, 255)]}
+    stale = _curves(_blob(edited, stale=True))
+    assert stale._same_curves(_curves(_blob(edited)))
+    assert not stale._same_curves(_curves(_blob({})))
+
+
+@pytest.mark.parametrize(
+    ("channel", "x"), [("luma", 0.5), ("rgb", float("nan")), ("rgb", float("inf"))]
+)
+def test_evaluate_rejects_bad_input(channel: str, x: float) -> None:
+    with pytest.raises(ValueError):
+        _curves(_blob({})).evaluate(channel, x)
 
 
 def test_rejects_other_sizes() -> None:

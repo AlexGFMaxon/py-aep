@@ -727,6 +727,14 @@ class Property(PropertyBase):
         self._curves: Curves | None = None
         """`_arbp` decoded, on first read."""
 
+        self._arbps: list[Chunk] = []
+        """Every aRbp in the Curves effect's LIST:aRbs: the static curves,
+        or one per keyframe (set by the parser)."""
+
+        self._default_arbp: Chunk | None = None
+        """The Curves effect's default curves, from its parT (set by the
+        parser)."""
+
     @property
     def _is_vf_axis(self) -> bool:
         """`True` for a variable-font axis slot property."""
@@ -1463,6 +1471,16 @@ class Property(PropertyBase):
         if self._curves is None:
             self._curves = Curves._from_binary(CurvesArbpChunk.from_arbp(self._arbp))
         return self._curves
+
+    def _keyframe_curves(self, keyframe: Keyframe) -> Curves | None:
+        """A keyed Curves effect's curves at `keyframe`, from its own aRbp.
+
+        `None` when the aRbs does not hold one aRbp per keyframe.
+        """
+        if len(self._arbps) != len(self.keyframes):
+            return None
+        index = next(i for i, kf in enumerate(self.keyframes) if kf is keyframe)
+        return Curves._from_binary(CurvesArbpChunk.from_arbp(self._arbps[index]))
 
     def _reject_curves_write(self) -> None:
         """Refuse a write to the Curves effect's curves, which py-aep only reads.
@@ -2584,10 +2602,15 @@ class Property(PropertyBase):
             and not self._tdsb.synthetic
         ):
             return True
-        # The Curves effect's curves have no stored default: AE reports them
-        # unmodified while every curve leaves every level unchanged.
+        # The Curves effect's default curves are an aRbp in its parT; an
+        # untouched instance's is byte-identical to it. The curves are
+        # compared, not the bytes, which carry stale points and junk.
         if self._arbp is not None:
-            return not self._static_curves().is_identity
+            curves = self._static_curves()
+            if self._default_arbp is None:
+                return not curves.is_identity
+            default = CurvesArbpChunk.from_arbp(self._default_arbp)
+            return not curves._same_curves(Curves._from_binary(default))
         if self.match_name in _ALWAYS_MODIFIED:
             return True
         if self.default_value is not None:
@@ -3290,6 +3313,7 @@ class Property(PropertyBase):
             IndexError: If the property has no keyframes.
             ValueError: If `key_index` is out of range.
         """
+        self._reject_curves_write()
         if not self.keyframes:
             raise IndexError("property has no keyframes")
         _validate_number(integer=True, min=0, max=len(self.keyframes) - 1)(key_index)
@@ -3319,6 +3343,8 @@ class Property(PropertyBase):
         Markers have no static value: the property is left empty. A
         no-op when the property has no keyframes.
         """
+        if self.keyframes:
+            self._reject_curves_write()
         if self._parallel_kind() is not None:
             while self.keyframes:
                 self.remove_key(len(self.keyframes) - 1)

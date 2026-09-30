@@ -485,6 +485,8 @@ class Keyframe:
         [TextDocument][]. For marker properties, this is a [MarkerValue][].
         For properties that carry no value, this is `None`.
         """
+        if self._property is not None and self._property._arbp is not None:
+            return self._property._keyframe_curves(self)
         val = (
             self._value
             if self._value is not _VALUE_FROM_CHUNK
@@ -508,6 +510,7 @@ class Keyframe:
             )
         prop = self._property
         if prop is not None:
+            prop._reject_curves_write()
             # Reuse the property's value validation (numeric bounds + finite
             # check); it is a no-op for complex value types. Keeps NaN/inf and
             # out-of-range values out of keyframe floats just as `.value=` does.

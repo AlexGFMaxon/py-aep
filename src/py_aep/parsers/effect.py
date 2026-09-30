@@ -13,6 +13,7 @@ from ..binary.scalar_chunks import Utf8Chunk
 from ..binary.utils import (
     ChunkNotFoundError,
     filter_by_list_type,
+    filter_by_type,
     find_by_list_type,
     find_by_type,
 )
@@ -255,6 +256,8 @@ def _merge_param_def(prop: Property, param_def: dict[str, Any]) -> None:
     """
     prop._auto_name = param_def["name"] or prop._auto_name
     prop._property_control_type = param_def["property_control_type"]
+    if prop._arbp is not None and "default_arbp" in param_def:
+        prop._default_arbp = param_def["default_arbp"]
     prop._property_value_type = param_def.get(
         "property_value_type", prop.property_value_type
     )
@@ -708,6 +711,12 @@ def _parse_effect_parameter_def(parameter_chunks: list[Chunk]) -> dict[str, Any]
     extractor = _PARD_EXTRACTORS.get(control_type)
     if extractor is not None:
         extractor(pard_chunk, result)
+
+    # An arbitrary-data parameter's default follows its pard: the Curves
+    # effect's untouched curves, byte-identical to an untouched instance's.
+    default_arbp = filter_by_type(chunks=parameter_chunks, chunk_type="aRbp")
+    if default_arbp:
+        result["default_arbp"] = default_arbp[0]
 
     try:
         pdnm_chunk = cast(
