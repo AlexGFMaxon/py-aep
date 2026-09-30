@@ -10,6 +10,8 @@ from .layer import Layer
 
 if TYPE_CHECKING:
     from ..items.composition import CompItem
+    from ..properties.property import Property
+    from ..properties.property_group import PropertyGroup
 
 
 class CameraLayer(Layer):
@@ -44,6 +46,34 @@ class CameraLayer(Layer):
         """Always `True`: a camera / light layer only exists in 3D space.
         Read-only."""
         return True
+
+    def _default_position(self) -> list[float]:
+        """AE's default Position: the camera's Zoom in front of the comp centre.
+
+        It follows the current Zoom (pre-expression, at time 0): AE leaves a
+        Position still there out of the file and places the camera from the
+        Zoom on open (measured on AE 2026, also after the Zoom was later
+        keyframed or given an expression).
+        """
+        comp = self.containing_comp
+        options = cast("PropertyGroup", self["ADBE Camera Options Group"])
+        zoom = cast("float", cast("Property", options["ADBE Camera Zoom"]).value)
+        return [comp.width / 2.0, comp.height / 2.0, -zoom]
+
+    def _write_out_position_off_zoom(self) -> None:
+        """Materialize a left-out Position its Zoom no longer places.
+
+        Changing the Zoom of a camera whose Position AE left out keeps the
+        camera where it was: AE 2026 then writes the Position, which reads
+        modified. Left out, it would reopen at the new Zoom instead. Run on
+        save, so every way of changing the Zoom (its value, keyframes,
+        `set_value_at_time`) is covered.
+        """
+        position = cast("Property", self.transform["ADBE Position"])
+        if position._tdsb is None or not position._tdsb.synthetic:
+            return
+        if position.is_modified:
+            position._ensure_materialized()
 
     @classmethod
     def _new(  # type: ignore[override]
