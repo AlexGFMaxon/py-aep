@@ -1,4 +1,5 @@
-"""Property-level chunk types: tdsb, tdb4, cdat, tdum/tduM.
+"""Property-level chunk types: tdsb, tdb4, cdat, tdum/tduM, and the Curves
+effect's aRbp layout.
 
 TdsbChunk and Tdb4Chunk use `fmt_field()` with `BitField` descriptors.
 CdatChunk and TdumChunk override `read()` / `write()` because they
@@ -8,6 +9,7 @@ have variable-length or context-dependent layouts.
 from __future__ import annotations
 
 import struct
+from io import BytesIO
 from typing import TYPE_CHECKING, TypeVar
 
 from attrs import Factory, define
@@ -15,7 +17,18 @@ from attrs import Factory, define
 from .bin_utils import read_bytes, write_bytes
 from .bitfield import BitField
 from .chunk import Chunk, ContainerChunk
-from .fmt_field import bool_field, f8_field, u1_field, u2_field, u4_field, u8_field
+from .fmt_field import (
+    FmtItem,
+    bool_field,
+    bytes_field,
+    f8_field,
+    items_field,
+    s4_field,
+    u1_field,
+    u2_field,
+    u4_field,
+    u8_field,
+)
 from .registry import register
 from .scalar_chunks import Utf8Chunk, _StringChunkBase
 from .utils import find_by_type
@@ -521,3 +534,74 @@ class VfdnChunk(TdsnChunk):
     """
 
     chunk_type: str = "vfdn"
+
+
+# ---------------------------------------------------------------------------
+# aRbp - the Curves effect's curves (ADBE CurvesCustom-0001)
+# ---------------------------------------------------------------------------
+
+_CURVES_SLOTS = 16
+_CURVES_RECORD_SIZE = 72
+CURVES_ARBP_SIZE = 4 + 5 * 256 + 5 * _CURVES_RECORD_SIZE
+"""The size of a Curves effect's aRbp, in bytes."""
+
+
+@define
+class CurvesRecordItem(FmtItem):
+    """One channel's points in a Curves aRbp (72 bytes).
+
+    16 `(i16 x, i16 y)` point slots, input then output in 0..255, then a
+    `u32` count of the live slots (the ones past it hold stale points or
+    junk) and an `i32` selected point (-1 for none).
+    """
+
+    _point_slots: bytes = bytes_field(4 * _CURVES_SLOTS, repr=False)
+    count: int = u4_field()
+    selected: int = s4_field()
+
+    @property
+    def points(self) -> list[tuple[int, int]]:
+        """The live `(input, output)` points."""
+        values = struct.unpack(f">{2 * _CURVES_SLOTS}h", self._point_slots)
+        count = min(self.count, _CURVES_SLOTS)
+        return [(values[2 * i], values[2 * i + 1]) for i in range(count)]
+
+
+@define
+class CurvesArbpChunk(Chunk):
+    """The Curves effect's arbitrary data: an aRbp of 1644 big-endian bytes
+    in a LIST:aRbs beside the property's tdbs.
+
+    - `u16` version (1), then `u16` mode: 1 when the curves are drawn with
+      points, 0 when drawn with the pencil (the maps are then the curves and
+      the points are stale).
+    - Five 256-entry `u8` maps, in the channel order RGB (the master), red,
+      green, blue, alpha. With points, each is its curve rounded to the
+      nearest level and clamped to 0..255; 8 bpc renders these maps.
+    - Five `CurvesRecordItem`s, in the same order.
+
+    Not registered: an aRbp holds whatever arbitrary data its effect
+    defines, so the tree keeps the raw chunk (and its bytes) and this layout
+    is read from it on demand, by `from_arbp`.
+    """
+
+    chunk_type: str = "aRbp"
+    version: int = u2_field()
+    mode: int = u2_field()
+    maps: bytes = bytes_field(5 * 256, repr=False)
+    records: list[CurvesRecordItem] = items_field(CurvesRecordItem, _CURVES_RECORD_SIZE)
+
+    @classmethod
+    def from_arbp(cls, arbp: Chunk) -> CurvesArbpChunk:
+        """Read a raw aRbp chunk's data as the Curves layout.
+
+        Raises:
+            ValueError: If the data is not 1644 bytes long.
+        """
+        if len(arbp.data) != CURVES_ARBP_SIZE:
+            raise ValueError(
+                f"a Curves aRbp is {CURVES_ARBP_SIZE} bytes, not {len(arbp.data)}"
+            )
+        chunk = cls.read(BytesIO(arbp.data), len(arbp.data), chunk_type="aRbp")
+        assert isinstance(chunk, cls)
+        return chunk

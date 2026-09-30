@@ -47,6 +47,7 @@ from ...binary.mutations import (
 from ...binary.property_chunks import (
     TDSN_SENTINEL,
     CdatChunk,
+    CurvesArbpChunk,
     Tdb4Chunk,
     TdmnChunk,
     TdsbChunk,
@@ -122,6 +123,7 @@ if TYPE_CHECKING:
         list[float],
         float,
         int,
+        Curves,
         Gradient,
         MarkerValue,
         Shape,
@@ -721,6 +723,9 @@ class Property(PropertyBase):
         self._arbp: Chunk | None = None
         """The Curves effect's curves, its arbitrary data (set by the
         parser); `value` decodes it as a [Curves][]."""
+
+        self._curves: Curves | None = None
+        """`_arbp` decoded, on first read."""
 
     @property
     def _is_vf_axis(self) -> bool:
@@ -1452,6 +1457,25 @@ class Property(PropertyBase):
             return None
         return cast("list[Property]", followers)
 
+    def _static_curves(self) -> Curves:
+        """The Curves effect's static curves, decoded from `_arbp`."""
+        assert self._arbp is not None
+        if self._curves is None:
+            self._curves = Curves._from_binary(CurvesArbpChunk.from_arbp(self._arbp))
+        return self._curves
+
+    def _reject_curves_write(self) -> None:
+        """Refuse a write to the Curves effect's curves, which py-aep only reads.
+
+        Raises:
+            ValueError: If this property holds a Curves effect's curves.
+        """
+        if self._arbp is not None:
+            raise ValueError(
+                f"{self.match_name!r} holds the Curves effect's curves, which "
+                f"are read-only: py-aep does not write them back"
+            )
+
     @property
     def value(self) -> _ValueType:
         """The value of the named property at the current time.
@@ -1482,8 +1506,8 @@ class Property(PropertyBase):
         separated = self._separated_value()
         if separated is not None:
             return separated
-        if self._arbp is not None:
-            return Curves(self._arbp.data)
+        if self._arbp is not None and not self.keyframes:
+            return self._static_curves()
         if self._value is not None:
             return self._wire_text_version(self._value)
         if self.keyframes:
@@ -1494,6 +1518,7 @@ class Property(PropertyBase):
 
     @value.setter
     def value(self, value: _ValueType) -> None:
+        self._reject_curves_write()
         if self._separation_followers() is not None:
             raise ValueError(
                 f"cannot set the value of {self.match_name!r} while its "
@@ -2559,6 +2584,10 @@ class Property(PropertyBase):
             and not self._tdsb.synthetic
         ):
             return True
+        # The Curves effect's curves have no stored default: AE reports them
+        # unmodified while every curve leaves every level unchanged.
+        if self._arbp is not None:
+            return not self._static_curves().is_identity
         if self.match_name in _ALWAYS_MODIFIED:
             return True
         if self.default_value is not None:
@@ -3040,6 +3069,7 @@ class Property(PropertyBase):
             ValueError: If the property cannot vary over time, or has no
                 value to keyframe.
         """
+        self._reject_curves_write()
         return self._add_key(time)
 
     def _add_key(self, time: float, value: Any = _USE_VALUE) -> int:
@@ -3742,6 +3772,7 @@ class Property(PropertyBase):
             time: The composition time, in seconds.
             new_value: The value to set at that time.
         """
+        self._reject_curves_write()
         validate_number(time)
         if self._separation_followers() is not None:
             # AE 2026 rejects this on a separated leader for the same reason
