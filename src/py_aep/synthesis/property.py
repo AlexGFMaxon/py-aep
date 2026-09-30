@@ -3568,7 +3568,7 @@ _LAYER_STYLES_SPECS: list[GroupSpec] = [
 # ---------------------------------------------------------------------------
 
 # Canonical order of transform properties as reported by ExtendScript.
-# Spatial values (Anchor Point, Position, Position_0, Position_1) are
+# Spatial values (Anchor Point, Position and its X / Y / Z followers) are
 # computed from layer/comp dimensions; all others use a fixed default.
 _TRANSFORM_SPECS: list[PropSpec] = [
     _spec(
@@ -3651,7 +3651,6 @@ _TRANSFORM_FIXED_DEFAULTS: dict[str, float | list[float]] = {
     "ADBE Rotate Z": 0.0,
     "ADBE Opacity": 100.0,
     "ADBE Orientation": [0.0, 0.0, 0.0],
-    "ADBE Position_2": 0.0,
     "ADBE Envir Appear in Reflect": 1.0,
 }
 

@@ -193,12 +193,15 @@ def _set_transform_defaults(layer: Layer, ae_major: int) -> None:
             -zoom / 4.0,
         ]
 
-    # Spatial defaults depend on layer dimensions.
+    # Spatial defaults depend on layer dimensions. The X / Y / Z followers
+    # default to the leader's components: separating a camera or light
+    # Position left at its default reads all three unmodified in AE 2026.
     spatial_defaults: dict[str, list[float] | float] = {
         "ADBE Anchor Point": [anchor_w / 2.0, anchor_h / 2.0, 0.0],
         "ADBE Position": position,
-        "ADBE Position_0": comp_w / 2.0,
-        "ADBE Position_1": comp_h / 2.0,
+        "ADBE Position_0": position[0],
+        "ADBE Position_1": position[1],
+        "ADBE Position_2": position[2],
     }
 
     # --- Phase 1: set default_value on properties parsed from binary --------
@@ -235,6 +238,7 @@ def _set_transform_defaults(layer: Layer, ae_major: int) -> None:
     _INACTIVE_FOLLOWER_VALUE: dict[str, float] = {
         "ADBE Position_0": 0.0,
         "ADBE Position_1": 0.0,
+        "ADBE Position_2": 0.0,
     }
 
     overrides: dict[str, tuple[float | list[float], float | list[float]]] = {}
