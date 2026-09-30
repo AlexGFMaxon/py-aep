@@ -27,10 +27,11 @@ if TYPE_CHECKING:
     from typing import Union
 
     from ...binary.ldat_chunks import LdatItem
+    from .curves import Curves
     from .property import Property
 
     _ValueType = Union[
-        list[float], float, Gradient, MarkerValue, Shape, TextDocument, None
+        list[float], float, Curves, Gradient, MarkerValue, Shape, TextDocument, None
     ]
 
 

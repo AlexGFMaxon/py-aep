@@ -1,20 +1,8 @@
 """The curves of the Curves effect (`ADBE CurvesCustom-0001`).
 
-After Effects keeps them as the effect's own arbitrary data: an `aRbp`
-chunk of 1644 big-endian bytes in a `LIST:aRbs` beside the property's
-`tdbs`.
-
-- `u16` version (1), then `u16` mode: 1 when the curves are drawn with
-  points, 0 when drawn with the pencil. The maps are then the curves and
-  the points are stale.
-- Five 256-entry `u8` maps, in the channel order RGB (the master), red,
-  green, blue, alpha. With points, each is its curve rounded to the
-  nearest level and clamped to 0..255. 8 bpc renders these maps.
-- Five 72-byte records in the same order:
-  - 16 `(i16 x, i16 y)` point slots, input then output, in 0..255;
-  - a `u32` count of the live slots (the slots past it hold stale points,
-    or junk);
-  - an `i32` selected point (-1 for none).
+After Effects keeps them as the effect's own arbitrary data, an `aRbp`
+chunk (see `CurvesArbpChunk` for the layout): a mode, then per channel (the
+RGB master, red, green, blue, alpha) a 256-entry map and its points.
 
 A curve through points is the natural cubic spline through them (second
 derivative 0 at both ends, a straight line through two points). It is flat
@@ -27,24 +15,27 @@ unpremultiplied.
 from __future__ import annotations
 
 import math
-import struct
-from typing import Sequence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from ...binary.property_chunks import CurvesArbpChunk
 
 CURVES_CHANNELS = ("rgb", "red", "green", "blue", "alpha")
 """Channel names, in After Effects' order: `rgb` is the master curve."""
 
-_SIZE = 4 + 5 * 256 + 5 * 72
-_MAPS = 4
-_RECORDS = 4 + 5 * 256
-_RECORD = 72
-_SLOTS = 16
-
 
 class _NaturalSpline:
-    """Natural cubic spline through `(x, y)` points, flat outside them."""
+    """Natural cubic spline through `(x, y)` points, flat outside them.
+
+    Points sharing an input keep the last one's output, as a curve can only
+    pass through one output per input.
+    """
 
     def __init__(self, points: Sequence[tuple[float, float]]) -> None:
-        pts = sorted((float(x), float(y)) for x, y in points)
+        by_x = {float(x): float(y) for x, y in points}
+        pts = sorted(by_x.items())
         self.xs = [p[0] for p in pts]
         self.ys = [p[1] for p in pts]
         n = len(pts)
@@ -92,91 +83,131 @@ class _NaturalSpline:
         h = xs[i + 1] - xs[i]
         u = (xs[i + 1] - x) / h
         v = 1.0 - u
-        return u * ys[i] + v * ys[i + 1] + ((u**3 - u) * m[i] + (v**3 - v) * m[i + 1]) * h * h / 6.0
-
-    def slope(self, x: float, side: int = 1) -> float:
-        """dy/dx at `x`, on the segment right of it (`side` 1) or left of it (-1)."""
-        xs, ys, m = self.xs, self.ys, self.m
-        if len(xs) < 2 or x < xs[0] or x > xs[-1]:
-            return 0.0
-        if (x == xs[0] and side < 0) or (x == xs[-1] and side > 0):
-            return 0.0
-        i = self._segment(x - 1e-12 if side < 0 else x)
-        i = min(max(i, 0), len(xs) - 2)
-        h = xs[i + 1] - xs[i]
-        u = (xs[i + 1] - x) / h
-        v = 1.0 - u
-        return (ys[i + 1] - ys[i]) / h + (-(3 * u * u - 1) * m[i] + (3 * v * v - 1) * m[i + 1]) * h / 6.0
+        cubic = (u**3 - u) * m[i] + (v**3 - v) * m[i + 1]
+        return u * ys[i] + v * ys[i + 1] + cubic * h * h / 6.0
 
 
 class CurvesChannel:
-    """One channel's curve: its points and its 8-bit map."""
+    """One channel's curve: its points and its 8-bit map. Read-only."""
 
-    def __init__(self, name: str, points: list[tuple[int, int]], lut: bytes, selected: int) -> None:
-        self.name = name
-        self.points = points
-        """The live points, `(input, output)` in 0..255."""
-        self.map = lut
-        """256 output levels, one per input level."""
-        self.selected = selected
+    def __init__(
+        self,
+        name: str,
+        points: list[tuple[int, int]],
+        lut: bytes,
+        selected: int,
+    ) -> None:
+        self._name = name
+        self._points = points
+        self._map = lut
+        self._selected = selected
         self._spline: _NaturalSpline | None = None
+
+    @property
+    def name(self) -> str:
+        """The channel: `rgb` (the master), `red`, `green`, `blue` or `alpha`."""
+        return self._name
+
+    @property
+    def points(self) -> list[tuple[int, int]]:
+        """The live points, `(input, output)` in 0..255."""
+        return list(self._points)
+
+    @property
+    def map(self) -> list[int]:
+        """256 output levels, one per input level."""
+        return list(self._map)
+
+    @property
+    def selected(self) -> int:
+        """The index of the selected point, -1 for none."""
+        return self._selected
+
+    @property
+    def is_identity(self) -> bool:
+        """Whether the curve leaves every level unchanged."""
+        return all(v == i for i, v in enumerate(self._map)) and all(
+            x == y for x, y in self._points
+        )
 
     def spline(self) -> _NaturalSpline:
         """The natural cubic spline through the points, in 0..255 on both axes."""
         if self._spline is None:
-            self._spline = _NaturalSpline(self.points)
+            self._spline = _NaturalSpline(self._points)
         return self._spline
 
-    @property
-    def is_identity(self) -> bool:
-        return all(v == i for i, v in enumerate(self.map)) and all(x == y for x, y in self.points)
-
     def __repr__(self) -> str:
-        return f"CurvesChannel({self.name!r}, points={self.points!r})"
+        return f"CurvesChannel({self._name!r}, points={self._points!r})"
 
 
 class Curves:
     """The five curves of a Curves effect.
 
-    Read only: a change is not written back to the project.
+    Read-only: py-aep does not write curves back to the project.
     """
 
-    def __init__(self, data: bytes) -> None:
-        if len(data) != _SIZE:
-            raise ValueError(f"a Curves value is {_SIZE} bytes, not {len(data)}")
-        self.version, self.mode = struct.unpack_from(">HH", data, 0)
-        self.channels: dict[str, CurvesChannel] = {}
-        for c, name in enumerate(CURVES_CHANNELS):
-            lut = bytes(data[_MAPS + 256 * c : _MAPS + 256 * (c + 1)])
-            offset = _RECORDS + _RECORD * c
-            slots = struct.unpack_from(f">{2 * _SLOTS}h", data, offset)
-            count, selected = struct.unpack_from(">Ii", data, offset + 4 * _SLOTS)
-            count = min(count, _SLOTS)
-            points = [(slots[2 * i], slots[2 * i + 1]) for i in range(count)]
+    def __init__(self) -> None:
+        self._version = 1
+        self._mode = 1
+        self._channels: dict[str, CurvesChannel] = {}
+
+    @classmethod
+    def _from_binary(cls, chunk: CurvesArbpChunk) -> Curves:
+        """Build the curves from a Curves effect's aRbp layout."""
+        obj = cls()
+        obj._version = chunk.version
+        obj._mode = chunk.mode
+        for c, (name, record) in enumerate(zip(CURVES_CHANNELS, chunk.records)):
+            lut = chunk.maps[256 * c : 256 * (c + 1)]
+            points = record.points
             if len(points) < 2:
                 # Nothing usable: the channel's map is all there is.
                 points = [(0, lut[0]), (255, lut[255])]
-            self.channels[name] = CurvesChannel(name, points, lut, selected)
+            obj._channels[name] = CurvesChannel(name, points, lut, record.selected)
+        return obj
+
+    @property
+    def version(self) -> int:
+        """The data's version, 1."""
+        return self._version
+
+    @property
+    def mode(self) -> int:
+        """1 when the curves are drawn with points, 0 with the pencil."""
+        return self._mode
 
     @property
     def uses_points(self) -> bool:
-        """Whether the curves go through their points; if not they were drawn with the pencil and
-        their maps are what renders."""
-        return self.mode != 0
+        """Whether the curves go through their points; if not, they were
+        drawn with the pencil and their maps are what renders."""
+        return self._mode != 0
+
+    @property
+    def channels(self) -> dict[str, CurvesChannel]:
+        """The curves by channel name, in `CURVES_CHANNELS` order."""
+        return dict(self._channels)
+
+    @property
+    def is_identity(self) -> bool:
+        """Whether every curve leaves every level unchanged, as an untouched
+        Curves does."""
+        return all(ch.is_identity for ch in self._channels.values())
 
     def evaluate(self, channel: str, x: float, clamp: bool = True) -> float:
-        """One channel's curve at `x` in 0..1, on its own (not through the master), as 16 bpc renders
-        it. `clamp=False` leaves the spline's overshoot as 32 bpc does between the points."""
-        ch = self.channels[channel]
+        """One channel's curve at `x` in 0..1, on its own (not through the
+        master), as 16 bpc renders it. `clamp=False` leaves the spline's
+        overshoot as 32 bpc does between the points."""
+        ch = self._channels[channel]
         if self.uses_points:
             y = ch.spline()(x * 255.0) / 255.0
         else:
             f = min(max(x, 0.0), 1.0) * 255.0
             i = min(int(math.floor(f)), 254)
             t = f - i
-            y = (ch.map[i] * (1.0 - t) + ch.map[i + 1] * t) / 255.0
+            lut = ch._map
+            y = (lut[i] * (1.0 - t) + lut[i + 1] * t) / 255.0
         return min(max(y, 0.0), 1.0) if clamp else y
 
     def __repr__(self) -> str:
-        edited = [n for n, c in self.channels.items() if not c.is_identity]
-        return f"Curves(mode={self.mode}, edited={edited})"
+        edited = [n for n, c in self._channels.items() if not c.is_identity]
+        return f"Curves(mode={self._mode}, edited={edited})"

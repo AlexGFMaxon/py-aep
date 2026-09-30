@@ -7,11 +7,16 @@ import struct
 
 import pytest
 
+from py_aep.binary.chunk import Chunk
+from py_aep.binary.property_chunks import CurvesArbpChunk
+from py_aep.cli.validate import to_dict
 from py_aep.models.properties.curves import CURVES_CHANNELS, Curves
 
 
-def _blob(points: dict[str, list[tuple[int, int]]], mode: int = 1, stale: bool = False) -> bytes:
-    """A Curves value as After Effects writes it, the maps left for the test to fill."""
+def _blob(
+    points: dict[str, list[tuple[int, int]]], mode: int = 1, stale: bool = False
+) -> bytes:
+    """A Curves aRbp as After Effects writes it, the maps left identity."""
     out = bytearray(4 + 5 * 256 + 5 * 72)
     struct.pack_into(">HH", out, 0, 1, mode)
     for c, name in enumerate(CURVES_CHANNELS):
@@ -27,29 +32,45 @@ def _blob(points: dict[str, list[tuple[int, int]]], mode: int = 1, stale: bool =
     return bytes(out)
 
 
+def _curves(data: bytes) -> Curves:
+    arbp = Chunk(chunk_type="aRbp", data=data)
+    return Curves._from_binary(CurvesArbpChunk.from_arbp(arbp))
+
+
 def test_decodes_points_in_channel_order() -> None:
-    curves = Curves(_blob({"rgb": [(0, 0), (168, 93), (255, 246)]}, stale=True))
+    curves = _curves(_blob({"rgb": [(0, 0), (168, 93), (255, 246)]}, stale=True))
     assert curves.uses_points
     assert curves.channels["rgb"].points == [(0, 0), (168, 93), (255, 246)]
     assert curves.channels["red"].points == [(0, 0), (255, 255)]
     assert curves.channels["red"].is_identity
     assert not curves.channels["rgb"].is_identity
+    assert not curves.is_identity
+
+
+def test_untouched_curves_are_identity() -> None:
+    assert _curves(_blob({})).is_identity
 
 
 def test_natural_spline_goes_through_the_points() -> None:
-    curves = Curves(_blob({"rgb": [(0, 0), (41, 30), (129, 149), (191, 211), (255, 255)]}))
+    points = [(0, 0), (41, 30), (129, 149), (191, 211), (255, 255)]
+    curves = _curves(_blob({"rgb": points}))
     for x, y in curves.channels["rgb"].points:
         assert math.isclose(curves.evaluate("rgb", x / 255.0), y / 255.0, abs_tol=1e-9)
 
 
 def test_two_points_are_a_straight_line() -> None:
-    curves = Curves(_blob({"green": [(0, 51), (255, 204)]}))
+    curves = _curves(_blob({"green": [(0, 51), (255, 204)]}))
     assert math.isclose(curves.evaluate("green", 0.5), 0.5, abs_tol=1e-9)
+
+
+def test_duplicate_inputs_keep_the_last_output() -> None:
+    curves = _curves(_blob({"rgb": [(0, 0), (128, 64), (128, 192), (255, 255)]}))
+    assert math.isclose(curves.evaluate("rgb", 128 / 255.0), 192 / 255.0)
 
 
 def test_overshoot_is_clamped_unless_asked() -> None:
     # Grayscale 4: the spline dips below 0 near black.
-    curves = Curves(_blob({"rgb": [(0, 0), (62, 18), (193, 238), (255, 255)]}))
+    curves = _curves(_blob({"rgb": [(0, 0), (62, 18), (193, 238), (255, 255)]}))
     assert curves.evaluate("rgb", 0.05) == 0.0
     assert curves.evaluate("rgb", 0.05, clamp=False) < 0.0
 
@@ -57,12 +78,23 @@ def test_overshoot_is_clamped_unless_asked() -> None:
 def test_pencil_mode_reads_the_maps() -> None:
     blob = bytearray(_blob({}, mode=0))
     blob[4 : 4 + 256] = bytes(255 - i for i in range(256))
-    curves = Curves(bytes(blob))
+    curves = _curves(bytes(blob))
     assert not curves.uses_points
     assert math.isclose(curves.evaluate("rgb", 0.0), 1.0)
     assert math.isclose(curves.evaluate("rgb", 1.0), 0.0)
 
 
+def test_to_dict_emits_the_curves() -> None:
+    data = to_dict(_curves(_blob({"rgb": [(0, 0), (168, 93), (255, 246)]})))
+    assert data["mode"] == 1
+    assert data["version"] == 1
+    assert data["is_identity"] is False
+    rgb = data["channels"]["rgb"]
+    assert rgb["points"] == [(0, 0), (168, 93), (255, 246)]
+    assert rgb["map"] == list(range(256))
+    assert rgb["selected"] == -1
+
+
 def test_rejects_other_sizes() -> None:
     with pytest.raises(ValueError):
-        Curves(b"\x00" * 16)
+        CurvesArbpChunk.from_arbp(Chunk(chunk_type="aRbp", data=b"\x00" * 16))
