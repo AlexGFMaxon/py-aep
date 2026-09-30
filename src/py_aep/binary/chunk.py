@@ -409,10 +409,7 @@ class ContainerChunk(Chunk):
     ) -> ContainerChunk:
         if ctx is None:
             ctx = EMPTY_CTX
-        start = fp.tell()
-        head = fp.read(min(size, 8))
-        fp.seek(start)
-        if not _starts_with_chunk(head, size):
+        if not _tiles_as_chunks(fp, size):
             return cls._read_legacy(fp, size, chunk_type=chunk_type)
         defer = kwargs.get("defer_list_types")
         # Pass-through context (no list_type level change)
@@ -420,25 +417,33 @@ class ContainerChunk(Chunk):
         return cls(chunk_type=chunk_type, chunks=chunks)
 
     @classmethod
-    def _read_legacy(cls, fp: IO[bytes], size: int, *, chunk_type: str) -> ContainerChunk:
+    def _read_legacy(
+        cls, fp: IO[bytes], size: int, *, chunk_type: str
+    ) -> ContainerChunk:
         """A body holding the string itself, as older projects write it: NUL
-        terminated in a buffer of its own size (a `fnam` of 48 bytes, a
-        `tdsn` of a lone zero byte), where newer ones wrap it in a `Utf8`
-        child. The bytes are kept to be written back as they were; the
-        string is a synthetic `Utf8` child, for the readers."""
+        terminated, in a buffer sized to it (a `tdsn` of a lone zero byte, a
+        `pdnm`) or of a fixed size (a 48-byte `fnam`), where newer ones wrap
+        it in a `Utf8` child. The bytes are kept to be written back as they
+        were; the string is a synthetic `Utf8` child, for the readers."""
         data = read_bytes(fp, size)
-        nul = data.find(b"\x00")
-        text = (data[:nul] if nul >= 0 else data).decode("UTF-8", "surrogateescape")
-        value = cls._legacy_value(text)
+        value = cls._legacy_value(_legacy_text(data))
         from .scalar_chunks import Utf8Chunk
 
-        chunks: list[Chunk] = [Utf8Chunk(value=value, synthetic=True)] if value is not None else []
+        chunks: list[Chunk] = []
+        if value is not None:
+            chunks.append(Utf8Chunk(value=value, synthetic=True))
         return cls(chunk_type=chunk_type, data=data, chunks=chunks)
 
     @classmethod
     def _legacy_value(cls, text: str) -> str | None:
         """The `Utf8` value standing for a legacy body's string."""
         return text
+
+    @classmethod
+    def _legacy_string(cls, value: str) -> str:
+        """The legacy body's string standing for a `Utf8` value (the inverse
+        of `_legacy_value`)."""
+        return value
 
     def __iter__(self) -> Iterator[Chunk]:
         return iter(self.chunks)
@@ -458,27 +463,67 @@ class ContainerChunk(Chunk):
 
     def _legacy_body(self) -> bytes:
         """A legacy body (see `_read_legacy`), with its string changed if the
-        synthetic `Utf8` child's value was: in the same buffer, truncated to
-        fit with its NUL."""
-        nul = self.data.find(b"\x00")
-        text = (self.data[:nul] if nul >= 0 else self.data).decode("UTF-8", "surrogateescape")
+        synthetic `Utf8` child's value was.
+
+        A buffer sized to its string is resized to the new one and its NUL.
+        A fixed `fnam` keeps its size; a string that does not fit raises
+        rather than being cut.
+
+        Raises:
+            ValueError: If the new string does not fit a fixed buffer.
+        """
         utf8 = next((c for c in self.chunks if c.chunk_type == "Utf8"), None)
-        value = getattr(utf8, "value", None)
-        if value is None or value == self._legacy_value(text):
+        value: str | None = getattr(utf8, "value", None)
+        if value is None or value == self._legacy_value(_legacy_text(self.data)):
             return self.data
-        encoded = value.encode("UTF-8", "surrogateescape")[: max(len(self.data) - 1, 0)]
+        encoded = self._legacy_string(value).encode("UTF-8", "surrogateescape")
+        if self.chunk_type not in _LEGACY_FIXED_BUFFERS:
+            return encoded + b"\x00"
+        if len(encoded) + 1 > len(self.data):
+            raise ValueError(
+                f"{value!r} does not fit this project's {len(self.data)}-byte "
+                f"{self.chunk_type} (at most {len(self.data) - 1} UTF-8 bytes)"
+            )
         return encoded.ljust(len(self.data), b"\x00")
 
 
-def _starts_with_chunk(head: bytes, size: int) -> bool:
-    """Whether a body of `size` bytes, starting with `head`, starts with a
-    child chunk: a header of a printable type and a length that fits."""
-    if len(head) < 8:
-        return size == 0
-    if not all(0x20 <= b < 0x7F for b in head[:4]):
-        return False
-    (length,) = struct.unpack(">I", head[4:8])
-    return length <= size - 8
+_LEGACY_FIXED_BUFFERS = frozenset({"fnam"})
+"""Legacy string bodies of a fixed size, whatever their string (a 48-byte
+`fnam`); the others are sized to their string."""
+
+
+def _legacy_text(data: bytes) -> str:
+    """The NUL-terminated string at the start of a legacy body."""
+    nul = data.find(b"\x00")
+    return (data[:nul] if nul >= 0 else data).decode("UTF-8", "surrogateescape")
+
+
+def _tiles_as_chunks(fp: IO[bytes], size: int) -> bool:
+    """Whether a body of `size` bytes at `fp` is a run of child chunks.
+
+    Every header must have a printable type, and the children (each padded
+    to an even size) must end exactly at the body's end. Checking only the
+    first header is not enough: a legacy 48-byte `fnam` holding a 4-letter
+    name (`Fill`, `Glow`) reads as a `Fill` chunk of length 0 followed by
+    NUL padding. The body is walked by seeking; `fp` is left where it was.
+    """
+    start = fp.tell()
+    pos = 0
+    try:
+        while pos < size:
+            if size - pos < 8:
+                return False
+            header = fp.read(8)
+            if len(header) < 8 or not all(0x20 <= b < 0x7F for b in header[:4]):
+                return False
+            length: int = struct.unpack(">I", header[4:8])[0]
+            pos += 8 + length + (length & 1)
+            if pos > size:
+                return False
+            fp.seek(start + pos)
+        return pos == size
+    finally:
+        fp.seek(start)
 
 
 # ---------------------------------------------------------------------------
