@@ -20,7 +20,7 @@ from py_aep.binary.item_chunks import NhedChunk
 from py_aep.binary.misc_chunks import DwgaChunk
 from py_aep.binary.property_chunks import TDSN_SENTINEL, TdsnChunk
 from py_aep.binary.scalar_chunks import Utf8Chunk
-from py_aep.enums import BitsPerChannel
+from py_aep.enums import BitsPerChannel, GpuAccelType
 from py_aep.parsers.project import _nnhd_from_nhed
 
 
@@ -170,10 +170,28 @@ def test_cc12_settings_synced_to_nhed_write_through() -> None:
     assert project._nnhd.synthetic
 
 
-@pytest.mark.parametrize(
-    ("name", "value"), [("working_gamma", 2.4), ("_timecode_default_base", 30)]
-)
-def test_cc12_settings_with_nowhere_to_go_raise(name: str, value: float) -> None:
+def test_cc12_working_gamma_has_nowhere_to_go_and_raises() -> None:
     project = _as_cc12_project()
     with pytest.raises(AttributeError, match="requires AE 13"):
-        setattr(project, name, value)
+        project.working_gamma = 2.4
+
+
+def test_cc12_timecode_default_base_synced_to_nhed() -> None:
+    project = _as_cc12_project()
+    project._timecode_default_base = 60
+    assert project._nhed.timecode_default_base == 60
+
+
+def test_cc12_timecode_default_base_above_u1_raises() -> None:
+    project = _as_cc12_project()
+    with pytest.raises(ValueError):
+        project._timecode_default_base = 300
+    assert project._nhed.timecode_default_base == 30
+
+
+def test_gpu_accel_type_software_without_gpug() -> None:
+    project = _as_cc12_project()
+    project._gpug_utf8 = Utf8Chunk(
+        value=GpuAccelType.to_binary(GpuAccelType.SOFTWARE), synthetic=True
+    )
+    assert project.gpu_accel_type == GpuAccelType.SOFTWARE
