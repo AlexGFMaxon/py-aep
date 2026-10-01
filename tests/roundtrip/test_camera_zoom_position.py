@@ -18,8 +18,8 @@ from helpers import get_comp, parse_project_fresh
 
 from py_aep import parse as parse_aep
 from py_aep.models.layers import CameraLayer
-from py_aep.models.properties.property import Property
 from py_aep.models.project import Project
+from py_aep.models.properties.property import Property
 
 SAMPLES_DIR = Path(__file__).parent.parent.parent / "samples" / "models" / "layer"
 SAMPLE = SAMPLES_DIR / "camera_default_position.aep"
@@ -63,6 +63,13 @@ class TestZoomChange:
         z_follower = camera.transform["ADBE Position_2"]
         assert isinstance(z_follower, Property)
         assert z_follower.default_value == pytest.approx(-3000.0)
+
+    def test_default_is_float_after_int_zoom(self) -> None:
+        camera = _camera(parse_project_fresh(SAMPLE))
+        _zoom(camera).value = 3000
+
+        default = _position(camera).default_value
+        assert all(isinstance(v, float) for v in default)
 
     def test_static_zoom_change_writes_position(self, tmp_path: Path) -> None:
         project = parse_project_fresh(SAMPLE)
