@@ -393,6 +393,11 @@ class ContainerChunk(Chunk):
     Used for fnam, pdnm, RCom (and tdsn via the `TdsnChunk` subclass) -
     wrapper chunks that hold a single Utf8 child (or similar). Unlike
     ListChunk, there is no 4-byte list_type prefix in the binary data.
+
+    Older projects (AE CC 12.0) write the string itself as the body,
+    NUL-terminated, instead of a Utf8 child: such a body keeps its bytes
+    in `data` and stands its string in as a synthetic Utf8 child (see
+    `_read_legacy`).
     """
 
     chunks: list[Chunk] = Factory(list)
@@ -426,16 +431,15 @@ class ContainerChunk(Chunk):
         it in a `Utf8` child. The bytes are kept to be written back as they
         were; the string is a synthetic `Utf8` child, for the readers."""
         data = read_bytes(fp, size)
-        value = cls._legacy_value(_legacy_text(data))
+        # Deferred: scalar_chunks imports Chunk from this module, which
+        # imports the chunk modules only at its end, once Chunk is defined.
         from .scalar_chunks import Utf8Chunk
 
-        chunks: list[Chunk] = []
-        if value is not None:
-            chunks.append(Utf8Chunk(value=value, synthetic=True))
-        return cls(chunk_type=chunk_type, data=data, chunks=chunks)
+        utf8 = Utf8Chunk(value=cls._legacy_value(_legacy_text(data)), synthetic=True)
+        return cls(chunk_type=chunk_type, data=data, chunks=[utf8])
 
     @classmethod
-    def _legacy_value(cls, text: str) -> str | None:
+    def _legacy_value(cls, text: str) -> str:
         """The `Utf8` value standing for a legacy body's string."""
         return text
 
