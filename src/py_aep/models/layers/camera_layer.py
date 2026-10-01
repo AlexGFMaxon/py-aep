@@ -57,7 +57,7 @@ class CameraLayer(Layer):
         """
         comp = self.containing_comp
         options = cast("PropertyGroup", self["ADBE Camera Options Group"])
-        zoom = cast("float", cast("Property", options["ADBE Camera Zoom"]).value)
+        zoom = float(cast("float", cast("Property", options["ADBE Camera Zoom"]).value))
         return [comp.width / 2.0, comp.height / 2.0, -zoom]
 
     def _write_out_position_off_zoom(self) -> None:
