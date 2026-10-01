@@ -11,6 +11,7 @@ from ..binary.utils import (
     find_by_list_type,
     find_by_type,
 )
+from ..enums import GpuAccelType
 from ..models.descriptors import _suppress_materialization
 from ..models.project import Project
 from .effect import parse_effect_definitions
@@ -113,7 +114,10 @@ def parse_project(
             "Utf8Chunk", find_by_type(chunks=gpug_chunk.chunks, chunk_type="Utf8")
         )
     except ChunkNotFoundError:
-        gpug_utf8 = Utf8Chunk(value="", synthetic=True)
+        # AE 2026 reports SOFTWARE for a CC 12.0 project.
+        gpug_utf8 = Utf8Chunk(
+            value=GpuAccelType.to_binary(GpuAccelType.SOFTWARE), synthetic=True
+        )
 
     # Expression engine: LIST:ExEn > Utf8
     exen_utf8 = None

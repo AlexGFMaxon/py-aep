@@ -225,9 +225,12 @@ class Project:
     _timecode_default_base = ChunkField[int](
         "_nnhd",
         "timecode_default_base",
-        validate=_validate_number(min=1, max=999, integer=True),
-        # No nhed field syncs it: in a CC 12.0 project it would be lost.
-        min_version=13,
+        # nhed holds it as a u1, so a CC 12.0 project (whose nnhd is a
+        # synthetic stand-in) persists at most 255.
+        validate=_validate_number(
+            min=1, max=lambda obj: 255 if obj._nnhd.synthetic else 999, integer=True
+        ),
+        post_set=lambda obj: obj._sync_nhed_timecode_default_base(),
     )
     """The Default Base value in the Time Display Style section of
     the Project Settings dialog, under Timecode. Read/Write."""
@@ -321,8 +324,9 @@ class Project:
         "value",
         min_version=13,
     )
-    """The GPU acceleration type for the project. None if not
-    recognised. Read / Write."""
+    """The GPU acceleration type for the project: the UUID string if not
+    recognised, SOFTWARE for an AE CC 12.0 project (as AE reports it).
+    Read / Write."""
 
     # ChunkField needs a chunk_attr that resolves to an object holding the
     # target field.  _xmp lives directly on Project, so we alias _aep = self
@@ -675,6 +679,12 @@ class Project:
     def _sync_nhed_field(self, field_name: str) -> None:
         setattr(self._nhed, field_name, getattr(self._nnhd, field_name))
 
+    def _sync_nhed_timecode_default_base(self) -> None:
+        # nhed matches nnhd in every sample, none above 255; what AE writes
+        # in its u1 for a larger base is unmeasured, so it is left as is.
+        if self._nnhd.timecode_default_base <= 0xFF:
+            self._sync_nhed_field("timecode_default_base")
+
     def _ensure_materialized(self) -> None:
         """Keep the stand-ins for root chunks older projects lack synthetic.
 
@@ -682,8 +692,8 @@ class Project:
         synthetic ones (see `parse_project`), which `ChunkField` writes land
         on. They stay out of the file: an nnhd setting persists through the
         nhed it syncs to, and the settings with no older counterpart
-        (`working_gamma`, `gpu_accel_type`, `_timecode_default_base`) are
-        gated by `min_version` instead of being dropped on save.
+        (`working_gamma`, `gpu_accel_type`) are gated by `min_version`
+        instead of being dropped on save.
         """
 
     @property

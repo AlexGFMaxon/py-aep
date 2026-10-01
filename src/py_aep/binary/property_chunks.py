@@ -496,7 +496,7 @@ class TdsnChunk(ContainerChunk):
         )
 
     @classmethod
-    def _legacy_value(cls, text: str) -> str | None:
+    def _legacy_value(cls, text: str) -> str:
         # An empty legacy name is an unnamed property: the name resolves from
         # the match name, as for the sentinel.
         return text or TDSN_SENTINEL
