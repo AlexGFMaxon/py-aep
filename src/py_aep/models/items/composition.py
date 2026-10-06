@@ -511,10 +511,24 @@ class CompItem(AVItem):
     Resolution When Nested" option in the Advanced tab of the Composition
     Settings dialog box. Read / Write."""
 
-    width = ChunkField[int]("_cdta", "width", validate=validate_footage_dimension)
+    # Left-out camera and light properties follow the comp's size and pixel
+    # aspect. Loading the layers before a change builds them at the size the
+    # file has, so `save` writes the ones the change moves where they were,
+    # as AE does.
+    width = ChunkField[int](
+        "_cdta",
+        "width",
+        validate=validate_footage_dimension,
+        pre_set="_ensure_layers_loaded",
+    )
     """The width of the item in pixels. Read / Write."""
 
-    height = ChunkField[int]("_cdta", "height", validate=validate_footage_dimension)
+    height = ChunkField[int](
+        "_cdta",
+        "height",
+        validate=validate_footage_dimension,
+        pre_set="_ensure_layers_loaded",
+    )
     """The height of the item in pixels. Read / Write."""
 
     shutter_angle = ChunkField[int](
@@ -745,7 +759,11 @@ class CompItem(AVItem):
         self.duration = value / _grid_rate(self._cdta)
 
     pixel_aspect = ChunkField[float](
-        "_cdta", "pixel_aspect", validate=validate_pixel_aspect
+        "_cdta",
+        "pixel_aspect",
+        validate=validate_pixel_aspect,
+        # See `width`.
+        pre_set="_ensure_layers_loaded",
     )
     """The pixel aspect ratio of the item (1.0 is square). Read / Write."""
 

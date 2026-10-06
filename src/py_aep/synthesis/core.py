@@ -38,7 +38,6 @@ from ..models.properties.property_group import (
     _derive_layer_styles_enabled,
     _reorder_and_fill,
 )
-from ..resolvers.transform import default_camera_zoom
 from .property import (
     _PARAMETRIC_MESH_TOP_LEVEL_SPECS,
     _SKIP_FOR_CAMERA,
@@ -52,6 +51,8 @@ from .property import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from ..models.layers.layer import Layer
 
 
@@ -144,10 +145,10 @@ def _set_transform_defaults(layer: Layer, ae_major: int) -> None:
        Interest vs Anchor Point).
     5. Applies min/max bounds on transform leaf properties.
 
-    Spatial defaults (Anchor Point, Position, and the X / Y separated followers)
-    depend on layer dimensions - and a camera or light's Position on its zoom -
-    and are computed here; all other defaults are fixed constants defined in
-    `_TRANSFORM_FIXED_DEFAULTS`.
+    Spatial defaults (Anchor Point, Position, and the X / Y / Z separated
+    followers) depend on layer dimensions - and a camera or light's Position
+    on a camera zoom - and are computed here; all other defaults are fixed
+    constants defined in `_TRANSFORM_FIXED_DEFAULTS`.
     """
     transform = layer.transform
     if transform is None:
@@ -177,20 +178,8 @@ def _set_transform_defaults(layer: Layer, ae_major: int) -> None:
         anchor_h = comp_h
 
     position = [comp_w / 2.0, comp_h / 2.0, 0.0]
-    if isinstance(layer, CameraLayer):
-        # A camera's default Position is its Zoom in front of the comp centre.
+    if isinstance(layer, (CameraLayer, LightLayer)):
         position = layer._default_position()
-    elif isinstance(layer, LightLayer):
-        # A light's default Position sits up, right and in front of the comp
-        # centre, at fixed fractions of the comp's default camera zoom rather
-        # than any camera's. Measured on AE 2026 for every light type, at
-        # 1920x1080, 1440x1620, 2880x810, 810x1440 and a 2:1 pixel aspect.
-        zoom = default_camera_zoom(comp_w, layer.containing_comp.pixel_aspect)
-        position = [
-            comp_w / 2.0 + 0.03 * zoom,
-            comp_h / 2.0 - 0.03 * zoom,
-            -zoom / 4.0,
-        ]
 
     # Spatial defaults depend on layer dimensions. The X / Y / Z followers
     # default to the leader's components: separating a camera or light
@@ -264,14 +253,6 @@ def _set_transform_defaults(layer: Layer, ae_major: int) -> None:
         ae_major=ae_major,
     )
 
-    if isinstance(layer, CameraLayer):
-        # The default follows the Zoom as it changes, not the Zoom at parse.
-        camera = layer
-        leader = cast("Property", transform["ADBE Position"])
-        leader._default_value_source = camera._default_position
-        z_follower = cast("Property", transform["ADBE Position_2"])
-        z_follower._default_value_source = lambda: camera._default_position()[2]
-
     # For null layers where opacity was already parsed from binary,
     # override the value to 0 (matching ExtendScript behavior).
     if isinstance(layer, AVLayer) and layer.null_layer:
@@ -294,6 +275,31 @@ def _set_transform_defaults(layer: Layer, ae_major: int) -> None:
     for child in transform.properties:
         if isinstance(child, Property):
             _apply_bounds(child)
+
+
+def _component(source: Callable[[], list[float]], dim: int) -> Callable[[], float]:
+    """One component of the vector `source` returns, read on each call."""
+    return lambda: source()[dim]
+
+
+def _follow_live_defaults(layer: CameraLayer | LightLayer) -> None:
+    """Make the defaults that follow other state read it as it changes.
+
+    A camera or light's Position follows its comp's size, and a camera's its
+    Zoom too; a camera's Zoom and Focus Distance follow the comp's width and
+    pixel aspect. `Layer._write_out_moved_defaults` writes them once moved.
+    """
+    transform = layer.transform
+    position = cast("Property", transform["ADBE Position"])
+    position._default_value_source = layer._default_position
+    for dim in range(3):
+        follower = cast("Property", transform[f"ADBE Position_{dim}"])
+        follower._default_value_source = _component(layer._default_position, dim)
+    if isinstance(layer, CameraLayer):
+        options = cast("PropertyGroup", layer["ADBE Camera Options Group"])
+        for match_name in ("ADBE Camera Zoom", "ADBE Camera Focus Distance"):
+            prop = cast("Property", options[match_name])
+            prop._default_value_source = layer._default_zoom
 
 
 # ---------------------------------------------------------------------------
@@ -413,3 +419,5 @@ def synthesize_layer_properties(layer: Layer) -> None:
     # After the pass: a camera's default Position reads its Zoom, which is
     # only synthesized (when AE left it out) once its group is registered.
     _set_transform_defaults(layer, ae_major)
+    if isinstance(layer, (CameraLayer, LightLayer)):
+        _follow_live_defaults(layer)

@@ -2090,8 +2090,10 @@ class Project:
         """
         validate_path_does_not_exist(path)
         for comp in self.compositions:
-            for camera in comp.camera_layers:
-                camera._write_out_position_off_zoom()
+            # A comp whose layers were never loaded has had nothing moved.
+            if comp._layers_loaded:
+                for layer in comp.layers:
+                    layer._write_out_moved_defaults()
         path_obj = Path(path)
         path_obj.parent.mkdir(parents=True, exist_ok=True)
         filled = self._fill_relative_path_counts(

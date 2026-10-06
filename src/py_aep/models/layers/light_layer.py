@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, cast
 from py_aep.enums import LayerType, LightType
 
 from ...binary.layer_chunks import LdtaChunk
+from ...resolvers.transform import default_camera_zoom
 from ..descriptors import ChunkField
 from ..preferences import label_index
 from .av_layer import AVLayer
@@ -57,11 +58,26 @@ class LightLayer(Layer):
     # (2 * tan(fov/2) rounds to 0.72; AE uses the exact ratio).
     _zoom_dividend: float = 0.72
 
+    _LIVE_DEFAULTS = (("ADBE Transform Group", "ADBE Position"),)
+
     @property
     def is_3d(self) -> bool:
         """Always `True`: a camera / light layer only exists in 3D space.
         Read-only."""
         return True
+
+    def _default_position(self) -> list[float]:
+        """AE's default Position: up, right and in front of the comp centre,
+        at fixed fractions of the comp's default camera zoom rather than any
+        camera's. Measured on AE 2026 for every light type, at 1920x1080,
+        1440x1620, 2880x810, 810x1440 and a 2:1 pixel aspect."""
+        comp = self.containing_comp
+        zoom = default_camera_zoom(comp.width, comp.pixel_aspect)
+        return [
+            comp.width / 2.0 + 0.03 * zoom,
+            comp.height / 2.0 - 0.03 * zoom,
+            -zoom / 4.0,
+        ]
 
     light_type = ChunkField.enum(
         LightType,

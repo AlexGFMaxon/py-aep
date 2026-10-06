@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from ...binary.layer_chunks import LdtaChunk
 from ...enums import LayerType
+from ...resolvers.transform import default_camera_zoom
 from ..preferences import label_index
 from .layer import Layer
 
@@ -47,33 +48,33 @@ class CameraLayer(Layer):
         Read-only."""
         return True
 
+    _LIVE_DEFAULTS = (
+        ("ADBE Transform Group", "ADBE Position"),
+        ("ADBE Camera Options Group", "ADBE Camera Zoom"),
+        ("ADBE Camera Options Group", "ADBE Camera Focus Distance"),
+    )
+
     def _default_position(self) -> list[float]:
         """AE's default Position: the camera's Zoom in front of the comp centre.
 
-        It follows the current Zoom (pre-expression, at time 0): AE leaves a
-        Position still there out of the file and places the camera from the
-        Zoom on open (measured on AE 2026, also after the Zoom was later
-        keyframed or given an expression).
+        It follows the Zoom at the layer's own time 0, pre-expression: AE
+        leaves a Position still there out of the file and places the camera
+        from that Zoom on open (measured on AE 2026, also after the Zoom was
+        keyframed or given an expression, and on a layer started, trimmed or
+        stretched away from the comp's time 0).
         """
         comp = self.containing_comp
         options = cast("PropertyGroup", self["ADBE Camera Options Group"])
-        zoom = float(cast("float", cast("Property", options["ADBE Camera Zoom"]).value))
-        return [comp.width / 2.0, comp.height / 2.0, -zoom]
+        zoom = cast("Property", options["ADBE Camera Zoom"])
+        # The layer's time 0 is the comp time it starts at.
+        z = float(cast("float", zoom.value_at_time(self.start_time)))
+        return [comp.width / 2.0, comp.height / 2.0, -z]
 
-    def _write_out_position_off_zoom(self) -> None:
-        """Materialize a left-out Position its Zoom no longer places.
-
-        Changing the Zoom of a camera whose Position AE left out keeps the
-        camera where it was: AE 2026 then writes the Position, which reads
-        modified. Left out, it would reopen at the new Zoom instead. Run on
-        save, so every way of changing the Zoom (its value, keyframes,
-        `set_value_at_time`) is covered.
-        """
-        position = cast("Property", self.transform["ADBE Position"])
-        if position._tdsb is None or not position._tdsb.synthetic:
-            return
-        if position.is_modified:
-            position._ensure_materialized()
+    def _default_zoom(self) -> float:
+        """AE's default Zoom and Focus Distance: the comp's 50mm-lens zoom."""
+        comp = self.containing_comp
+        # AE rounds the zoom to 8 decimals before storing it.
+        return round(default_camera_zoom(comp.width, comp.pixel_aspect), 8)
 
     @classmethod
     def _new(  # type: ignore[override]

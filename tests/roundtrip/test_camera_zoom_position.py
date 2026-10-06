@@ -98,3 +98,24 @@ class TestZoomChange:
         assert position._tdsb.synthetic
         assert position.value == pytest.approx([720.0, 405.0, -1000.0])
         assert not position.is_modified
+
+    def test_start_shift_keeps_keyed_zoom_default(self, tmp_path: Path) -> None:
+        # The default reads the Zoom at the layer's own time 0, and the keys
+        # move with the layer: AE 2026 keeps this Position out of the file at
+        # -1000 after the shift, although the Zoom at comp time 0 is now past
+        # its first key.
+        project = parse_project_fresh(SAMPLE)
+        camera = get_comp(project, "zoom_keyed").layers[0]
+        assert isinstance(camera, CameraLayer)
+        camera.start_time = -1
+        assert not _position(camera).is_modified
+
+        out = tmp_path / "out.aep"
+        project.save(out)
+        reopened = get_comp(parse_aep(out).project, "zoom_keyed").layers[0]
+        assert isinstance(reopened, CameraLayer)
+        position = _position(reopened)
+
+        assert position._tdsb is not None
+        assert position._tdsb.synthetic
+        assert position.value == pytest.approx([720.0, 405.0, -1000.0])

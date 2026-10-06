@@ -135,6 +135,8 @@ class ChunkField(Generic[T]):
         default: Optional default value returned when the chunk body is
             `None`. If not given, accessing the field when the body is
             `None` raises `AttributeError`.
+        pre_set: Optional method name on the model instance, invoked
+            after validation and before the value is written.
         post_set: Optional method name on the model instance, or a
             callable receiving the model instance, invoked after the
             value has been written.
@@ -150,6 +152,7 @@ class ChunkField(Generic[T]):
         read_only: bool = False,
         validate: Callable[..., None] | None = None,
         default: Any = _SENTINEL,
+        pre_set: str | None = None,
         post_set: Callable[[Any], None] | str | None = None,
         min_version: int | None = None,
     ) -> None:
@@ -160,6 +163,7 @@ class ChunkField(Generic[T]):
         self.read_only = read_only
         self.validate = validate
         self.default = default
+        self.pre_set = pre_set
         self.post_set = post_set
         self.min_version = min_version
         # Derived once so __set__ validates membership without
@@ -221,6 +225,8 @@ class ChunkField(Generic[T]):
             self.validate(value, obj)
         if self._enum_cls is not None:
             _validate_enum_member(self._enum_cls, value, self.public_name)
+        if self.pre_set is not None:
+            getattr(obj, self.pre_set)()
         obj.__dict__.pop(self.public_name, None)
         body = getattr(obj, self.chunk_attr)
         if body is None:
