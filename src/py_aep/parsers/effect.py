@@ -130,19 +130,21 @@ def _resolve_effect_value(
     if control_type == PropertyControlType.BOOLEAN:
         value = param_def.get("default_value", param_def.get("last_value"))
         return value, value
-    # General case: last_value > default_value > override table > pard
-    # default.
-    value = param_def.get("last_value")
-    if value is None:
-        value = param_def.get("default_value")
+    # Any other control: AE leaves a parameter at its default out of the
+    # effect's tdgp, so an omitted one is at the default its pard declares,
+    # then the override table's, then the pard `default` field. The cached
+    # `last_value` is not the value: it is the value of whichever instance
+    # wrote the definition (another one when the definition is borrowed),
+    # or stale - S_BlurDirectional's Bias caches 0 where ExtendScript
+    # reports 0.5. It only stands in for a pard that declares no default.
+    value = param_def.get("default_value")
     if value is None:
         value = _PROPERTY_DEFAULTS.get(match_name)
     if value is None:
         value = param_def.get("default")
-    default_value: Any = param_def.get("default_value")
-    if default_value is None:
-        default_value = value
-    return value, default_value
+    if value is None:
+        value = param_def.get("last_value")
+    return value, value
 
 
 def _apply_param_def_metadata(
