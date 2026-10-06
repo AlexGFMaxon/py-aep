@@ -457,3 +457,9 @@ reads from the format version alone: the AE 23 layer record (a 22-or-older
 project relabelled 23 or later, or the reverse) and the AE 17 Media
 Replacement folder id. After Effects 2026 opens none of those relabelled
 files. Open and re-save the project in the target release instead.
+
+Projects saved by After Effects CC (12.x) can be read and edited. They
+store names as bare strings, so py_aep writes new names that way too, and
+`Application.version` refuses to relabel them: every release it can stamp
+reads names in the newer form. The settings those projects have no room
+for (`working_gamma`, `gpu_accel_type`) raise on write.

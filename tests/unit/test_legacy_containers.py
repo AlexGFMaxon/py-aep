@@ -14,12 +14,19 @@ from types import SimpleNamespace
 
 import pytest
 
-from py_aep import Project, parse
-from py_aep.binary.chunk import ContainerChunk, read_chunks, write_chunk
-from py_aep.binary.item_chunks import NhedChunk
+from py_aep import Project, new, parse
+from py_aep.binary.chunk import (
+    ContainerChunk,
+    ListChunk,
+    read_chunks,
+    write_aep,
+    write_chunk,
+)
+from py_aep.binary.item_chunks import HeadChunk, NhedChunk
 from py_aep.binary.misc_chunks import DwgaChunk
 from py_aep.binary.property_chunks import TDSN_SENTINEL, TdsnChunk
 from py_aep.binary.scalar_chunks import Utf8Chunk
+from py_aep.binary.utils import recursive_find
 from py_aep.enums import BitsPerChannel, GpuAccelType
 from py_aep.parsers.project import _nnhd_from_nhed
 
@@ -143,19 +150,10 @@ def test_a_legacy_fnam_too_long_for_its_buffer_raises() -> None:
         _write([fnam])
 
 
-SAMPLE = (
-    Path(__file__).parent.parent.parent
-    / "samples"
-    / "versions"
-    / "ae2026"
-    / "complete.aep"
-)
-
-
 def _as_cc12_project() -> Project:
     """A project with the stand-ins a CC 12.0 one parses with: no nnhd or
     dwga, a head of AE 12."""
-    project = parse(SAMPLE).project
+    project = new("15.0x1").project
     project._nnhd = _nnhd_from_nhed(project._nhed)
     project._dwga = DwgaChunk(synthetic=True)
     project._head = SimpleNamespace(ae_version_major=12)
@@ -195,3 +193,70 @@ def test_gpu_accel_type_software_without_gpug() -> None:
         value=GpuAccelType.to_binary(GpuAccelType.SOFTWARE), synthetic=True
     )
     assert project.gpu_accel_type == GpuAccelType.SOFTWARE
+
+
+def _older_project_bytes(name_chunks: list, file_format_version: int) -> bytes:
+    head = HeadChunk(chunk_type="head")
+    head.file_format_version = file_format_version
+    rifx = ListChunk(chunk_type="RIFX", list_type="Egg!", chunks=[head, *name_chunks])
+    out = BytesIO()
+    write_aep(out, rifx, "")
+    return out.getvalue()
+
+
+def test_new_names_in_an_older_project_are_written_as_strings() -> None:
+    # AE reads a `Utf8` child of a format 91 file as the name "Utf8".
+    names = [
+        ContainerChunk(chunk_type=chunk_type, chunks=[Utf8Chunk(value=value)])
+        for chunk_type, value in (
+            ("fnam", "Glow"),
+            ("pdnm", "On|Off"),
+            ("RCom", "note"),
+        )
+    ]
+    names.append(TdsnChunk(chunks=[Utf8Chunk(value=TDSN_SENTINEL)]))
+    data = _older_project_bytes(names, 91)
+    assert b"Utf8" not in data
+    assert _chunk("fnam", b"Glow".ljust(48, b"\x00")) in data
+    assert _chunk("pdnm", b"On|Off\x00") in data
+    assert _chunk("RCom", b"note\x00") in data
+    assert _chunk("tdsn", b"\x00") in data
+    # The same containers in a format 92 file keep their `Utf8` children.
+    modern = _older_project_bytes(names, 92)
+    assert modern.count(b"Utf8") == 4
+
+
+def test_names_edited_in_an_older_project_read_back(tmp_path: Path) -> None:
+    project = new("15.0x1").project
+    comp = project.root_folder.add_comp("comp", 100, 100, 1.0, 1.0, 24.0)
+    solid = comp.add_solid([1, 0, 0], "solid", 100, 100, 1.0)
+    solid["ADBE Mask Parade"].add_property("ADBE Mask Atom").name = "mask"
+    solid["ADBE Effect Parade"].add_property("ADBE Slider Control").name = "slider"
+    solid["ADBE Effect Parade"].add_property("ADBE Checkbox Control")
+    project.render_queue.add(comp).comment = "note"
+    project._head.file_format_version = 91
+    out = tmp_path / "older.aep"
+    project.save(out)
+    back = parse(out).project
+    names = [
+        chunk
+        for chunk_type in ("tdsn", "fnam", "pdnm", "RCom")
+        for chunk in recursive_find(back._rifx.chunks, chunk_type)
+    ]
+    assert len(names) > 4
+    assert all(chunk.data for chunk in names)
+    (layer,) = back.compositions[0].layers
+    assert [p.name for p in layer["ADBE Mask Parade"].properties] == ["mask"]
+    assert [p.name for p in layer["ADBE Effect Parade"].properties] == [
+        "slider",
+        "Checkbox Control",
+    ]
+    assert back.render_queue.items[0].comment == "note"
+
+
+def test_an_older_project_cannot_be_relabelled() -> None:
+    app = new("15.0x1")
+    app._head.file_format_version = 91
+    with pytest.raises(ValueError, match="older format"):
+        app.version = "16.0x1"
+    assert app.version == "15.0x1"
