@@ -7,6 +7,7 @@ the recursive reader/writer.
 from __future__ import annotations
 
 import struct
+from contextvars import ContextVar
 from io import BytesIO
 from typing import TYPE_CHECKING, cast
 
@@ -26,6 +27,8 @@ from .registry import CHUNK_TYPES, register
 
 if TYPE_CHECKING:
     from typing import IO, Any, Callable, Iterator
+
+    from .item_chunks import HeadChunk
 
 # ---------------------------------------------------------------------------
 # Chunk base (also serves as fallback for unregistered types)
@@ -456,7 +459,7 @@ class ContainerChunk(Chunk):
         return len(self.chunks)
 
     def write(self, fp: IO[bytes]) -> int:
-        if self.data:
+        if self.data or (_legacy_names.get() and self.chunk_type in _LEGACY_NAME_TYPES):
             return write_bytes(fp, self._legacy_body())
         written = 0
         for chunk in self.chunks:
@@ -466,34 +469,50 @@ class ContainerChunk(Chunk):
         return written
 
     def _legacy_body(self) -> bytes:
-        """A legacy body (see `_read_legacy`), with its string changed if the
-        synthetic `Utf8` child's value was.
+        """The legacy body (see `_read_legacy`) of the `Utf8` child's value: a
+        parsed body as it was read unless the value changed, a new one when
+        a container py_aep built is written into an older project.
 
         A buffer sized to its string is resized to the new one and its NUL.
-        A fixed `fnam` keeps its size; a string that does not fit raises
-        rather than being cut.
+        A fixed `fnam` keeps its size (48 bytes when new); a string that
+        does not fit raises rather than being cut.
 
         Raises:
             ValueError: If the new string does not fit a fixed buffer.
         """
         utf8 = next((c for c in self.chunks if c.chunk_type == "Utf8"), None)
-        value: str | None = getattr(utf8, "value", None)
-        if value is None or value == self._legacy_value(_legacy_text(self.data)):
+        value: str = getattr(utf8, "value", None) or ""
+        if self.data and value == self._legacy_value(_legacy_text(self.data)):
             return self.data
         encoded = self._legacy_string(value).encode("UTF-8", "surrogateescape")
-        if self.chunk_type not in _LEGACY_FIXED_BUFFERS:
+        size = len(self.data) or _LEGACY_FIXED_BUFFERS.get(self.chunk_type)
+        if self.chunk_type not in _LEGACY_FIXED_BUFFERS or size is None:
             return encoded + b"\x00"
-        if len(encoded) + 1 > len(self.data):
+        if len(encoded) + 1 > size:
             raise ValueError(
-                f"{value!r} does not fit this project's {len(self.data)}-byte "
-                f"{self.chunk_type} (at most {len(self.data) - 1} UTF-8 bytes)"
+                f"{value!r} does not fit this project's {size}-byte "
+                f"{self.chunk_type} (at most {size - 1} UTF-8 bytes)"
             )
-        return encoded.ljust(len(self.data), b"\x00")
+        return encoded.ljust(size, b"\x00")
 
 
-_LEGACY_FIXED_BUFFERS = frozenset({"fnam"})
+_LEGACY_FIXED_BUFFERS = {"fnam": 48}
 """Legacy string bodies of a fixed size, whatever their string (a 48-byte
 `fnam`); the others are sized to their string."""
+
+_LEGACY_NAME_TYPES = frozenset({"tdsn", "fnam", "pdnm", "RCom"})
+"""The name containers older projects hold as bare strings."""
+
+LEGACY_NAME_FORMAT = 92
+"""The file format version (`HeadChunk.file_format_version`) from which
+After Effects reads a name container's `Utf8` child. Measured on AE 2026: in
+a file of format 91.2 or older, a `Utf8` child reads as the name "Utf8" and
+a bare string as the name; from format 92.0 on, the reverse (AE 15 writes
+92.14)."""
+
+_legacy_names: ContextVar[bool] = ContextVar("_legacy_names", default=False)
+"""Set by `write_aep` while writing a project older than `LEGACY_NAME_FORMAT`,
+so name containers py_aep built are written as bare strings too."""
 
 
 def _legacy_text(data: bytes) -> str:
@@ -753,7 +772,12 @@ def read_aep(
 
 def write_aep(fp: IO[bytes], rifx: ListChunk, xmp: str) -> int:
     """Write an AEP file: RIFX root chunk + trailing XMP packet."""
-    written = write_chunk(fp, rifx)
+    head = cast("HeadChunk", next(c for c in rifx.chunks if c.chunk_type == "head"))
+    token = _legacy_names.set(head.file_format_version < LEGACY_NAME_FORMAT)
+    try:
+        written = write_chunk(fp, rifx)
+    finally:
+        _legacy_names.reset(token)
     xmp_bytes = xmp.encode("UTF-8")
     written += write_bytes(fp, xmp_bytes)
     return written

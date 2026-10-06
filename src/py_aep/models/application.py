@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..ae_version import ae_writes
+from ..binary.chunk import LEGACY_NAME_FORMAT
 from .descriptors import ChunkField
 from .validators import validate_ae_version, validate_u1
 
@@ -28,6 +29,15 @@ def _validate_version(value: object, obj: Application) -> None:
     validate_ae_version(value)
     current = obj._head.ae_version_major
     target = int(str(value).split(".", 1)[0])
+    if obj._head.file_format_version < LEGACY_NAME_FORMAT:
+        # Every release py_aep writes reads names as `Utf8` children, where
+        # this project holds them as bare strings (and lacks root chunks
+        # the newer format requires).
+        raise ValueError(
+            f"cannot relabel an After Effects {current} project as {target}: "
+            "it stores names in the older format; open and re-save it in "
+            "the target release instead"
+        )
     for part in _LAYOUT_PARTS:
         if ae_writes(part, current) != ae_writes(part, target):
             raise ValueError(
