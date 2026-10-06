@@ -106,7 +106,9 @@ class CurvesChannel:
         # AE leaves junk here at times (0x9200FF with 3 points).
         self._selected = selected if 0 <= selected < len(points) else -1
         self._uses_points = uses_points
-        self._spline: _NaturalSpline | None = None
+        self._spline = _NaturalSpline(points)
+        """The natural cubic spline through the points, in 0..255 on both
+        axes."""
 
     @property
     def name(self) -> str:
@@ -146,12 +148,6 @@ class CurvesChannel:
         if self._uses_points and other._uses_points:
             return self._points == other._points
         return self._map == other._map
-
-    def spline(self) -> _NaturalSpline:
-        """The natural cubic spline through the points, in 0..255 on both axes."""
-        if self._spline is None:
-            self._spline = _NaturalSpline(self._points)
-        return self._spline
 
     def __repr__(self) -> str:
         return f"CurvesChannel({self._name!r}, points={self._points!r})"
@@ -237,7 +233,7 @@ class Curves:
         validate_number(x)
         ch = self._channels[channel]
         if self.uses_points:
-            y = ch.spline()(x * 255.0) / 255.0
+            y = ch._spline(x * 255.0) / 255.0
         else:
             f = min(max(x, 0.0), 1.0) * 255.0
             i = min(int(math.floor(f)), 254)

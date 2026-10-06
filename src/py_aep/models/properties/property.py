@@ -100,6 +100,7 @@ from .overrides import (
     _UNBOUNDED_MATCH_NAMES,
 )
 from .parallel import (
+    _EMPTY_CDAT_PAD,
     GRADIENT_KIND,
     MARKER_KIND,
     ORIENTATION_KIND,
@@ -765,16 +766,13 @@ class Property(PropertyBase):
         """The axis display-name container AE writes after an active
         variable-font axis slot's tdbs (set by the parser)."""
 
-        self._arbp: Chunk | None = None
+        self._arbs: ListChunk | None = None
         """The Curves effect's curves, its arbitrary data (set by the
-        parser); `value` decodes it as a [Curves][]."""
+        parser): a LIST:aRbs of one aRbp, or of one per keyframe when keyed,
+        in key order. `value` decodes them as [Curves][]."""
 
         self._curves: Curves | None = None
-        """`_arbp` decoded, on first read."""
-
-        self._arbps: list[Chunk] = []
-        """Every aRbp in the Curves effect's LIST:aRbs: the static curves,
-        or one per keyframe (set by the parser)."""
+        """The static aRbp decoded, on first read."""
 
         self._default_arbp: Chunk | None = None
         """The Curves effect's default curves, from its parT (set by the
@@ -945,6 +943,10 @@ class Property(PropertyBase):
         container = self._kf_value_container
         if container is not None and old < len(container.chunks):
             container.chunks.insert(new, container.chunks.pop(old))
+        if self._arbs is not None and old < len(self._arbs.chunks):
+            # The Curves effect's curves, one aRbp per key: AE pairs them by
+            # position, so a key's curves move with it.
+            self._arbs.chunks.insert(new, self._arbs.chunks.pop(old))
         if self._parallel_kind() is TEXT_KIND:
             td = kf.value
             if isinstance(td, TextDocument):
@@ -1581,10 +1583,11 @@ class Property(PropertyBase):
         return cast("list[Property]", followers)
 
     def _static_curves(self) -> Curves:
-        """The Curves effect's static curves, decoded from `_arbp`."""
-        assert self._arbp is not None
+        """The Curves effect's static curves, decoded from its aRbp."""
+        assert self._arbs is not None
         if self._curves is None:
-            self._curves = Curves._from_binary(CurvesArbpChunk.from_arbp(self._arbp))
+            arbp = self._arbs.chunks[0]
+            self._curves = Curves._from_binary(CurvesArbpChunk.from_arbp(arbp))
         return self._curves
 
     def _keyframe_curves(self, keyframe: Keyframe) -> Curves | None:
@@ -1592,10 +1595,35 @@ class Property(PropertyBase):
 
         `None` when the aRbs does not hold one aRbp per keyframe.
         """
-        if len(self._arbps) != len(self.keyframes):
+        assert self._arbs is not None
+        arbps = self._arbs.chunks
+        if len(arbps) != len(self.keyframes):
             return None
-        index = next(i for i, kf in enumerate(self.keyframes) if kf is keyframe)
-        return Curves._from_binary(CurvesArbpChunk.from_arbp(self._arbps[index]))
+        arbp = arbps[index_by_identity(self.keyframes, keyframe)]
+        return Curves._from_binary(CurvesArbpChunk.from_arbp(arbp))
+
+    def _reset_curves(self) -> None:
+        """Reset the Curves effect's curves to a new instance's: static, with
+        the effect's default curves.
+
+        AE 2026's `addProperty("ADBE CurvesCustom")` writes an untouched
+        instance's bytes (a never-animated tdb4, the empty cdat, the parT's
+        default aRbp), whatever the project's stored definition of the
+        effect holds.
+        """
+        assert self._arbs is not None and self._default_arbp is not None
+        inner = self._keyframe_inner()
+        if inner is not None:
+            cdat = CdatChunk(pad=_EMPTY_CDAT_PAD)
+            chunks = self._tdbs.chunks
+            chunks[index_by_identity(chunks, inner)] = cdat
+            self._cdat = cdat
+            self.keyframes.clear()
+            tdb4_apply_static_template(
+                self._tdb4, in_interpolation=0, out_interpolation=0, spatial_flags=0
+            )
+        self._arbs.chunks[:] = [Chunk(chunk_type="aRbp", data=self._default_arbp.data)]
+        self._curves = None
 
     def _keyed_curves_at(self, time: float) -> Curves | None:
         """A keyed Curves effect's curves at composition `time`.
@@ -1625,7 +1653,7 @@ class Property(PropertyBase):
         Raises:
             ValueError: If this property holds a Curves effect's curves.
         """
-        if self._arbp is not None:
+        if self._arbs is not None:
             raise ValueError(
                 f"{self.match_name!r} holds the Curves effect's curves, which "
                 f"are read-only: py-aep does not write them back"
@@ -1652,8 +1680,8 @@ class Property(PropertyBase):
         current time. Otherwise, returns the static value. Read / Write.
 
         The type depends on `property_value_type`:
-        `list[float]`, `float`, `int`, [Gradient][], [MarkerValue][],
-        [Shape][], [TextDocument][], or `None`.
+        `list[float]`, `float`, `int`, [Curves][], [Gradient][],
+        [MarkerValue][], [Shape][], [TextDocument][], or `None`.
 
         Mutations on complex value types (TextDocument, Shape,
         MarkerValue, Gradient) write through to the backing chunks
@@ -1688,7 +1716,7 @@ class Property(PropertyBase):
         separated = self._separated_value()
         if separated is not None:
             return separated
-        if self._arbp is not None and not self.keyframes:
+        if self._arbs is not None and not self.keyframes:
             return self._static_curves()
         if self._value is not None:
             return self._wire_text_version(self._value)
@@ -2766,7 +2794,7 @@ class Property(PropertyBase):
         # The Curves effect's default curves are an aRbp in its parT; an
         # untouched instance's is byte-identical to it. The curves are
         # compared, not the bytes, which carry stale points and junk.
-        if self._arbp is not None:
+        if self._arbs is not None:
             curves = self._static_curves()
             if self._default_arbp is None:
                 return not curves.is_identity
@@ -2978,7 +3006,7 @@ class Property(PropertyBase):
             if separated is not None:
                 return separated
             return self._stored_static_value()
-        if self._arbp is not None:
+        if self._arbs is not None:
             return self._keyed_curves_at(time)
 
         kind = self._parallel_kind()

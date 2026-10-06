@@ -259,12 +259,9 @@ def _dispatch_tdbs(ctx: _ParseContext) -> list[Property | PropertyGroup]:
     # LIST:aRbs after the tdbs (whose cdat holds nothing of them): one per
     # keyframe when the curves are keyed.
     if ctx.match_name == "ADBE CurvesCustom-0001":
-        for arbs in filter_by_list_type(ctx.chunks, "aRbs"):
-            arbps = filter_by_type(chunks=arbs.chunks, chunk_type="aRbp")
-            if arbps:
-                prop._arbp = arbps[0]
-                prop._arbps = list(arbps)
-                break
+        arbs = filter_by_list_type(ctx.chunks, "aRbs")
+        if arbs:
+            prop._arbs = arbs[0]
     return [prop]
 
 
