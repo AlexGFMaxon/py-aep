@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from io import BytesIO
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from py_aep.data.builtin_effects import BUILTIN_EFFECTS
 from py_aep.data.effect_controls import EXPRESSION_CONTROLS
@@ -38,7 +38,6 @@ from ...binary.scalar_chunks import Utf8Chunk
 from ...binary.utils import ChunkNotFoundError, find_by_list_type, index_by_identity
 from ...data.dropdown_control import DROPDOWN_CONTROL
 from ...resolvers.font_axes import read_design_axes
-from ...resolvers.transform import default_camera_zoom
 from ...svg.fonts import resolve_font_exact
 from ...synthesis.property import (
     _GROUP_CHILD_SPECS,
@@ -56,6 +55,7 @@ if TYPE_CHECKING:
     from typing import Literal
 
     from ...synthesis.property import PropSpec
+    from ..layers.camera_layer import CameraLayer
     from .mask_property_group import MaskPropertyGroup
 
 
@@ -610,13 +610,9 @@ class PropertyGroup(PropertyBase):
         if self.match_name != "ADBE Camera Options Group":
             return None
         try:
-            comp = self._containing_layer.containing_comp
-            width = comp.width
-            pixel_aspect = comp.pixel_aspect
+            zoom = cast("CameraLayer", self._containing_layer)._default_zoom()
         except (ValueError, AttributeError):
             return None
-        # AE rounds the zoom to 8 decimals before storing it.
-        zoom = round(default_camera_zoom(width, pixel_aspect), 8)
         return {
             "ADBE Camera Zoom": (zoom, zoom),
             "ADBE Camera Focus Distance": (zoom, zoom),

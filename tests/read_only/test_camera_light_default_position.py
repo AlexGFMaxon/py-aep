@@ -2,10 +2,10 @@
 
 After Effects leaves a camera or light Position that sits at its default out
 of the file. A camera's default is `[w/2, h/2, -zoom]`, `zoom` its own Zoom at
-time 0; a light's is `[w/2 + 0.03 z, h/2 - 0.03 z, -z/4]`, `z` the comp's
-default camera zoom. The X / Y / Z separation followers default to the
-leader's components, so separating a Position left at its default reads all
-three unmodified.
+the layer's time 0; a light's is `[w/2 + 0.03 z, h/2 - 0.03 z, -z/4]`, `z`
+the comp's default camera zoom. The X / Y / Z separation followers default to
+the leader's components, so separating a Position left at its default reads
+all three unmodified.
 
 `camera_default_position.aep`: each 1440x810 comp holds a two-node camera
 whose Zoom was set to 1000 (the comp's default is 2000) and whose Position
@@ -16,7 +16,9 @@ and `zoom_1000_separated` separates the dropped Position.
 `light_default_position.aep`: one comp per size and pixel aspect, each holding
 every light type reset to its default Position (Layer > Transform > Reset),
 plus a Point light whose default Position was then separated. A scripted
-`addLight` does not place a light there, so the reset is what pins it.
+`addLight` does not place a light there, so the reset is what pins it. The
+layer named `Environment` is an Ambient light (its ExtendScript JSON reports
+`lightType` Ambient); `light_source_default.aep` holds an Environment one.
 """
 
 from __future__ import annotations

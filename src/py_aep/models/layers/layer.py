@@ -127,6 +127,10 @@ class Layer(PropertyGroup):
         LayerType.PARAMETRIC_MESH: "ParametricMeshLayer",
     }
 
+    # The (group, property) match names whose default follows other state,
+    # which `_write_out_moved_defaults` writes once that state moves it.
+    _LIVE_DEFAULTS: tuple[tuple[str, str], ...] = ()
+
     enabled = ChunkField.bool(
         "_ldta",
         "enabled",
@@ -726,6 +730,24 @@ class Layer(PropertyGroup):
         except KeyError:
             return None
         return group if isinstance(group, PropertyGroup) else None
+
+    def _write_out_moved_defaults(self) -> None:
+        """Write the left-out properties whose default has moved.
+
+        AE leaves a property at its default out of the file, and some
+        defaults follow other state (a camera's Position its Zoom, a camera
+        or light's its comp's size). When that state changes AE writes the
+        property, keeping it where it was, so it reads modified; left out,
+        it would reopen at the new default instead (measured on AE 2026).
+        Run on save, so every way of changing the state is covered.
+        """
+        for group_name, match_name in self._LIVE_DEFAULTS:
+            group = cast("PropertyGroup", self[group_name])
+            prop = cast("Property", group[match_name])
+            if prop._tdsb is None or not prop._tdsb.synthetic:
+                continue
+            if prop.is_modified:
+                prop._ensure_materialized()
 
     def _validate_parent(self, new_parent: Layer | None) -> None:
         """Reject parent assignments ExtendScript refuses: a layer from
