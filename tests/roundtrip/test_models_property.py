@@ -525,6 +525,39 @@ class TestRoundtripShapeClosed:
         assert mask_path3.value.closed is True
 
 
+class TestRoundtripMaskShapeOnEachLayerKind:
+    """A mask shape written on a source-less layer stays in pixels.
+
+    `mask_shape_and_text_layers.aep` holds a solid, a shape layer and a text
+    layer with a mask each. AE 2026 opens py-aep's save with the written
+    vertices on all three; dividing a source-less layer's shape by the size
+    AE reports for it (the comp's) read back as [-0.0156, -0.0278].
+    """
+
+    @pytest.mark.parametrize("layer_name", ["solid", "shape", "text"])
+    def test_written_vertices_read_back(self, tmp_path: Path, layer_name: str) -> None:
+        vertices = [[-10.0, -10.0], [30.0, -10.0], [30.0, 20.0], [-10.0, 20.0]]
+        project = parse_project_fresh(SAMPLES_DIR / "mask_shape_and_text_layers.aep")
+        layer = next(
+            ly for c in project.compositions for ly in c.layers if ly.name == layer_name
+        )
+        assert layer.masks is not None
+        layer.masks[0]["ADBE Mask Shape"].value = Shape(vertices=vertices)
+        out = tmp_path / "masks.aep"
+        project.save(out)
+
+        reopened = next(
+            ly
+            for c in parse_aep(out).project.compositions
+            for ly in c.layers
+            if ly.name == layer_name
+        )
+        assert reopened.masks is not None
+        shape = reopened.masks[0]["ADBE Mask Shape"].value
+        for vertex, want in zip(shape.vertices, vertices):
+            assert vertex == pytest.approx(want, abs=1e-4)
+
+
 class TestRoundtripKeyframeEase:
     """Roundtrip: modify KeyframeEase speed/influence."""
 

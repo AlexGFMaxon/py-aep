@@ -86,8 +86,8 @@ class TestResolveEffectValue:
                     "default_value": 10.0,
                 },
                 PropertyControlType.SCALAR,
-                (42.0, 10.0),
-                id="general_last_value_preferred",
+                (10.0, 10.0),
+                id="general_prefers_the_default",
             ),
             pytest.param(
                 {
@@ -111,7 +111,7 @@ class TestResolveEffectValue:
                 },
                 PropertyControlType.SCALAR,
                 (7.0, 7.0),
-                id="general_default_falls_back_to_value",
+                id="general_last_value_only_without_a_default",
             ),
         ],
     )
