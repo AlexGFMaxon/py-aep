@@ -594,11 +594,12 @@ class Keyframe:
         Position, Scale), this is a `list[float]`. For shape/mask path
         properties, this is a [Shape][]. For text properties, this is a
         [TextDocument][]. For marker properties, this is a [MarkerValue][].
-        For properties that carry no value, this is `None`.
+        For the Curves effect's curves, this is a [Curves][]. For properties
+        that carry no value, this is `None`.
         """
         if self._property is None:
             return self._stored_value
-        if self._property._arbp is not None:
+        if self._property._arbs is not None:
             return self._property._keyframe_curves(self)
         return cast("_ValueType", self._property._mask_inert_z(self._stored_value))
 

@@ -205,8 +205,11 @@ def _reset_to_default_values(group: PropertyGroup) -> None:
         if isinstance(child, PropertyGroup):
             _reset_to_default_values(child)
             continue
-        if child._arbp is not None:
-            # The Curves effect's curves are read-only: a clone keeps them.
+        if child._arbs is not None:
+            # The Curves effect's curves are arbitrary data, with no pard
+            # default to reset to.
+            child._reset_curves()
+            child._clear_expression()
             continue
         # Clearing the keyframes reverts the leaf to a static value, so
         # the value setter (which rejects keyframed properties) can run.

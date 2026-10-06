@@ -263,7 +263,7 @@ def _merge_param_def(
     """
     prop._auto_name = param_def["name"] or prop._auto_name
     prop._property_control_type = param_def["property_control_type"]
-    if prop._arbp is not None and "default_arbp" in param_def:
+    if prop._arbs is not None and "default_arbp" in param_def:
         prop._default_arbp = param_def["default_arbp"]
     prop._property_value_type = param_def.get(
         "property_value_type", prop.property_value_type

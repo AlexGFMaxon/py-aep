@@ -75,8 +75,9 @@ def test_pencil_curve_decodes_its_map() -> None:
 def test_untouched_curves_equal_the_parT_default() -> None:
     prop = _curves_property("untouched")
     assert prop._default_arbp is not None
-    assert prop._arbp is not None
-    assert prop._arbp.data == prop._default_arbp.data
+    assert prop._arbs is not None
+    (arbp,) = prop._arbs.chunks
+    assert arbp.data == prop._default_arbp.data
 
 
 def test_curves_are_read_only() -> None:
@@ -93,7 +94,7 @@ def _rounded_spline_is_the_map(curves: Curves) -> list[str]:
     for name, channel in curves.channels.items():
         if channel.is_identity:
             continue
-        spline = channel.spline()
+        spline = channel._spline
         levels = [
             math.floor(min(max(spline(level), 0.0), 255.0) + 0.5)
             for level in range(256)
@@ -174,4 +175,5 @@ def test_keyed_curves_keys_are_read_only() -> None:
         prop.remove_all_keys()
     with pytest.raises(ValueError, match="read-only"):
         prop.keyframes[0].value = prop.keyframes[1].value
-    assert len(prop.keyframes) == len(prop._arbps) == 3
+    assert prop._arbs is not None
+    assert len(prop.keyframes) == len(prop._arbs.chunks) == 3

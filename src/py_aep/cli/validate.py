@@ -961,8 +961,9 @@ def compare_keyframe(
         "Keyframe", "out_temporal_ease", "outTemporalEase" in expected_kf
     )
 
-    # Compare value
-    if "value" in expected_kf and parsed_kf.get("value") is not None:
+    # Compare value. The exporter writes None for a key value ExtendScript
+    # cannot read (a Curves key's, which aborts the script).
+    if expected_kf.get("value") is not None and parsed_kf.get("value") is not None:
         exp_val = expected_kf["value"]
         parsed_val = parsed_kf["value"]
         if isinstance(exp_val, dict) and "vertices" in exp_val:
