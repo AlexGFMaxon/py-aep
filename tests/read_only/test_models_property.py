@@ -606,15 +606,24 @@ class TestEffectProperties:
 
     @pytest.mark.parametrize(
         ("match_name", "expected"),
-        [("S_BlurDirectional-0063", 3), ("S_BlurDirectional-0068", 2)],
+        [
+            ("S_BlurDirectional-0063", 3),
+            ("S_BlurDirectional-0068", 2),
+            ("S_BlurDirectional-0053", 0.5),
+            ("S_BlurDirectional-0054", 1),
+            ("S_BlurDirectional-0060", 1),
+            ("S_BlurDirectional-0522", 1),
+            ("S_BlurDirectional-0525", 1),
+        ],
     )
-    def test_popup_absent_from_tdgp_is_at_its_default(
-        self, match_name: str, expected: int
+    def test_param_absent_from_tdgp_is_at_its_default(
+        self, match_name: str, expected: float
     ) -> None:
-        """A popup the effect does not store reads the pard's 1-based default.
+        """A parameter the effect does not store reads its pard default.
 
-        The effect's own parT stores `last_value` 1 for both, stale: AE 2026
-        reports their defaults, unmodified.
+        The parT caches stale values for these popups (Edge Mode 1) and
+        sliders (Bias, Blur Red, Brightness, Mocha Opacity, Resize Rel X:
+        0): AE 2026 reports their defaults, unmodified.
         """
         project = parse_project(BUGS_DIR / "29.97_fps_time_scale_3.125.aep")
         for comp in project.compositions:

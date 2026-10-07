@@ -127,9 +127,6 @@ def _resolve_effect_value(
         # exactly 80 on a 100-pixel layer.
         value = param_def.get("default_value")
         return value, value
-    if control_type == PropertyControlType.BOOLEAN:
-        value = param_def.get("default_value", param_def.get("last_value"))
-        return value, value
     # Any other control: AE leaves a parameter at its default out of the
     # effect's tdgp, so an omitted one is at the default its pard declares,
     # then the override table's, then the pard `default` field. The cached
