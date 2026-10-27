@@ -277,3 +277,46 @@ def test_a_changed_legacy_expression_is_written_with_its_nul() -> None:
     (expr,) = _read(_chunk("expr", b"value\x00"))
     expr.value = "time * 2"
     assert _write([expr]) == _chunk("expr", b"time * 2\x00")
+
+
+def test_a_built_expr_chunk_writes_its_header() -> None:
+    assert _write([ExprChunk(value="time")]) == _chunk("expr", b"time\x00")
+
+
+def _project_with_a_new_expression(file_format_version: int | None) -> Project:
+    project = new("15.0x1").project
+    comp = project.root_folder.add_comp("comp", 100, 100, 1.0, 1.0, 24.0)
+    solid = comp.add_solid([1, 0, 0], "solid", 100, 100, 1.0)
+    if file_format_version is not None:
+        project._head.file_format_version = file_format_version
+    solid["ADBE Transform Group"]["ADBE Opacity"].expression = "time * 10"
+    return project
+
+
+def test_a_new_expression_in_an_older_project_is_an_expr_chunk(
+    tmp_path: Path,
+) -> None:
+    # AE 2026 reads an expression from an `expr` chunk in a file of format 91
+    # and silently drops a `Utf8` one there; from format 92 on, it refuses a
+    # file with an `expr` chunk ("missing data in file").
+    out = tmp_path / "older.aep"
+    _project_with_a_new_expression(91).save(out)
+    data = out.read_bytes()
+    assert _chunk("expr", b"time * 10\x00") in data
+    assert _chunk("Utf8", b"time * 10") not in data
+    (layer,) = parse(out).project.compositions[0].layers
+    opacity = layer["ADBE Transform Group"]["ADBE Opacity"]
+    assert opacity.expression == "time * 10"
+    assert opacity.expression_enabled
+
+
+def test_a_new_expression_in_a_newer_project_is_a_utf8_chunk(
+    tmp_path: Path,
+) -> None:
+    out = tmp_path / "newer.aep"
+    _project_with_a_new_expression(None).save(out)
+    data = out.read_bytes()
+    assert _chunk("Utf8", b"time * 10") in data
+    assert b"expr" not in data
+    (layer,) = parse(out).project.compositions[0].layers
+    assert layer["ADBE Transform Group"]["ADBE Opacity"].expression == "time * 10"

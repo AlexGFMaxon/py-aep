@@ -61,32 +61,41 @@ def ae_writes(part: str, major: int) -> bool:
     return first <= major and (last is None or major <= last)
 
 
-def get_ae_version_major(obj: Any) -> int:
-    """Navigate from a model object to the AE version major number.
+def get_head(obj: Any) -> Any:
+    """Navigate from a model object to the project's `HeadChunk`.
 
     Supports Layer (via `containing_comp`), Item (via `_project`),
     ViewOptions (via `_item`), Property / PropertyGroup (via
     `_containing_layer`), and Project (via `_head`).
+
+    Raises:
+        TypeError: If `obj` does not lead to a project.
     """
     # Layer -> CompItem -> Project -> HeadChunk
     if hasattr(obj, "_containing_comp"):
-        return int(obj._containing_comp._project._head.ae_version_major)
+        return obj._containing_comp._project._head
     # Property / PropertyGroup -> owning Layer (parent_property chain)
     if hasattr(obj, "_containing_layer"):
-        return get_ae_version_major(obj._containing_layer)
+        return get_head(obj._containing_layer)
     # Item / RenderQueueItem -> Project -> HeadChunk
     if hasattr(obj, "_project"):
-        return int(obj._project._head.ae_version_major)
+        return obj._project._head
     # ViewOptions -> AVItem -> Project -> HeadChunk
     item = getattr(obj, "_item", None)
     if item is not None:
-        return int(item._project._head.ae_version_major)
+        return item._project._head
     # Project / TextDocument -> HeadChunk (TextDocument's is wired lazily, so
     # may be None until the document is handed out via a Property)
     head = getattr(obj, "_head", None)
     if head is not None:
-        return int(head.ae_version_major)
+        return head
     raise TypeError(f"Cannot determine AE version from {type(obj).__name__}")
+
+
+def get_ae_version_major(obj: Any) -> int:
+    """The AE version major number of the project `obj` belongs to (see
+    `get_head`)."""
+    return int(get_head(obj).ae_version_major)
 
 
 def requires_version(min_major: int) -> Callable[[F], F]:
