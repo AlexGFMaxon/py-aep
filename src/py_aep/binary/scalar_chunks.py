@@ -179,22 +179,24 @@ class ExprChunk(Chunk):
     string itself, NUL-terminated, where newer ones write a `Utf8` chunk.
     Written back as read unless `value` changed."""
 
+    chunk_type: str = "expr"
     value: str = ""
     _raw: bytes = b""
+
+    @staticmethod
+    def _decode(raw: bytes) -> str:
+        nul = raw.find(b"\x00")
+        return (raw[:nul] if nul >= 0 else raw).decode("UTF-8", "surrogateescape")
 
     @classmethod
     def read(
         cls, fp: IO[bytes], size: int, *, chunk_type: str = "", **kwargs: Any
     ) -> ExprChunk:
         raw = read_bytes(fp, size)
-        nul = raw.find(b"\x00")
-        text = (raw[:nul] if nul >= 0 else raw).decode("UTF-8", "surrogateescape")
-        return cls(chunk_type=chunk_type, value=text, raw=raw)
+        return cls(chunk_type=chunk_type, value=cls._decode(raw), raw=raw)
 
     def write(self, fp: IO[bytes]) -> int:
-        nul = self._raw.find(b"\x00")
-        read = (self._raw[:nul] if nul >= 0 else self._raw).decode("UTF-8", "surrogateescape")
-        if self._raw and self.value == read:
+        if self._raw and self.value == self._decode(self._raw):
             return write_bytes(fp, self._raw)
         return write_bytes(fp, self.value.encode("UTF-8", "surrogateescape") + b"\x00")
 

@@ -32,7 +32,8 @@ from py_aep.resolvers.interpolation import (
     split_spatial_path,
 )
 
-from ...binary.chunk import Chunk, ContainerChunk, ListChunk
+from ...ae_version import get_head
+from ...binary.chunk import LEGACY_NAME_FORMAT, Chunk, ContainerChunk, ListChunk
 from ...binary.composition_chunks import layer_timebase
 from ...binary.ldat_chunks import (
     LHD3_BLOCK_KEYFRAMES,
@@ -63,7 +64,7 @@ from ...binary.property_chunks import (
     tdb4_apply_static_template,
     tdb4_clear_keyframe_record,
 )
-from ...binary.scalar_chunks import S4Chunk, Utf8Chunk
+from ...binary.scalar_chunks import ExprChunk, S4Chunk, Utf8Chunk
 from ...binary.utils import (
     ChunkNotFoundError,
     find_by_list_type,
@@ -490,7 +491,7 @@ class Property(PropertyBase):
     # setting a name past them gets a full dict (1.9 KB instead of 0.3 KB on
     # 3.13), and a project holds 100k+ properties. So `__init__` sets the
     # common keys first and the rare ones only when they have a value.
-    _expression_utf8: Utf8Chunk | None = None
+    _expression_utf8: Utf8Chunk | ExprChunk | None = None
     _tdpi: S4Chunk | None = None
     _dimensions_separated: bool | None = None
     _expression_enabled: bool | None = None
@@ -808,7 +809,7 @@ class Property(PropertyBase):
         _tdmn: TdmnChunk,
         _tdsb: TdsbChunk,
         _tdb4: Tdb4Chunk,
-        _expression_utf8: Utf8Chunk | None = None,
+        _expression_utf8: Utf8Chunk | ExprChunk | None = None,
         _name_utf8: Utf8Chunk,
         _tdbs: ListChunk,
         _tdum: TdumChunk | None = None,
@@ -2634,7 +2635,15 @@ class Property(PropertyBase):
         if self._expression_utf8 is not None:
             self._expression_utf8.value = value
         else:
-            chunk = Utf8Chunk(value=value)
+            # Below file format 92 AE reads the expression from an `expr`
+            # chunk and silently drops a `Utf8` one; from 92 on it refuses
+            # an `expr` chunk ("missing data in file"): the gate of the name
+            # containers.
+            chunk: Utf8Chunk | ExprChunk
+            if get_head(self).file_format_version < LEGACY_NAME_FORMAT:
+                chunk = ExprChunk(value=value)
+            else:
+                chunk = Utf8Chunk(value=value)
             # AE stores the expression Utf8 immediately after the value
             # container (cdat or the keyframe LIST:list), BEFORE any
             # tdum/tduM bounds - the order is positional, so appending at
